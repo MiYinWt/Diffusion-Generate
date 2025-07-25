@@ -9,16 +9,17 @@ class DrugData(Data):
     @staticmethod
     def from_drug_dicts(protein_dict=None, ligand_dict=None, **kwargs):
         instance = DrugData(**kwargs)
-
-        if protein_dict is not None:
-            for key,item in protein_dict.items():
+        if protein_dict is None:
+            if ligand_dict is not None:
+                for key, item in ligand_dict.items():
+                    instance[key] = item
+                instance['orig_keys'] = list(ligand_dict.keys())
+        else:
+            for key, item in protein_dict.items():
                 instance['protein_' + key] = item
-        
-        if ligand_dict is not None:
-            for key,item in ligand_dict.items():
-                instance['ligand_' + key] = item
-            instance['orig_keys'] = list(ligand_dict.keys())
-
+            if ligand_dict is not None:
+                for key, item in ligand_dict.items():
+                    instance['ligand_' + key] = item            
         return instance
     
     def __inc__(self, key, value, *args, **kwargs):
