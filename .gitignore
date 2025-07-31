@@ -1,5 +1,5 @@
 __pycache__/
 datas/crossdocked2020/*
 datas/geom_drug/*
-checkpoints/*
+checkpoints/bondpred/*
 logs/*
