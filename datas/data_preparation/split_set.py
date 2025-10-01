@@ -10,6 +10,13 @@ from torch.utils.data import Subset
 from datasets.dataset import ProteinLigandDataset
 
 
+def get_pdb_name(fn):
+    return os.path.basename(fn)[:4]
+
+
+def get_chain_name(fn):
+    return os.path.basename(fn)[:6]
+
 def get_unique_pockets(dataset, raw_id, used_pdb, num_pockets):
     unique_id = []
     pdb_visited = set()
@@ -47,7 +54,7 @@ if __name__ == '__main__':
         fixed_split = torch.load(args.fixed_split)
         print('Load fixed split successfully!')
         name_id_dict = {}
-        print(data)
+        
         for idx, data in enumerate(tqdm(dataset, desc='Indexing')):
             
             name_id_dict[data.protein_filename + data.ligand_filename] = idx
