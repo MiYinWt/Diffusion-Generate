@@ -2,36 +2,31 @@ import torch
 import numpy as np
 from torch_geometric.data import Data
 
-class DrugData(Data):
+class ProteinLigandData(Data):
     def __init__(self, *args, **kwargs):
-        super(DrugData, self).__init__(*args, **kwargs)
+        super(ProteinLigandData, self).__init__(*args, **kwargs)
 
     @staticmethod
     def from_drug_dicts(protein_dict=None, ligand_dict=None, **kwargs):
-        instance = DrugData(**kwargs)
+        instance = ProteinLigandData(**kwargs)
         if protein_dict is None:
-            if ligand_dict is not None:
-                for key, item in ligand_dict.items():
-                    instance[key] = item
-                instance['orig_keys'] = list(ligand_dict.keys())
-        else:
             for key, item in protein_dict.items():
                 instance['protein_' + key] = item
-            if ligand_dict is not None:
-                for key, item in ligand_dict.items():
-                    instance['ligand_' + key] = item            
+        if ligand_dict is not None:
+            for key, item in ligand_dict.items():
+                instance['ligand_' + key] = item
+        instance["ligand_nbh_list"] = {
+            i.item(): [j.item() for k, j in enumerate(instance.ligand_bond_index[1]) 
+            if instance.ligand_bond_index[0, k].item() == i] for i in instance.ligand_bond_index[0]
+        }            
         return instance
     
     def __inc__(self, key, value, *args, **kwargs):
-        if key == 'bond_index':
-            return len(self['node_type'])
-        elif key == 'edge_index':
-            return len(self['node_type'])
-        elif key == 'halfedge_index':
-            return len(self['node_type'])
+        if key == "ligand_bond_index":
+            return self["ligand_element"].size(0)
         else:
-            return super().__inc__(key, value, *args, **kwargs)
-        
+            return super().__inc__(key, value)
+
 def torchify_dict(data):
     output = {}
     for k, v in data.items():

@@ -1,11 +1,19 @@
 import os
 import numpy as np
 from rdkit import Chem
+# from rdkit.Chem.rdchem import BondType
+# from rdkit.Chem import ChemicalFeatures
+# from rdkit import RDConfig
+
+# from utils.mol2frag import mol2frag
+
+# ATOM_FAMILIES = ['Acceptor', 'Donor', 'Aromatic', 'Hydrophobe', 'LumpedHydrophobe', 'NegIonizable', 'PosIonizable', 'ZnBinder']
+# ATOM_FAMILIES_ID = {s: i for i, s in enumerate(ATOM_FAMILIES)}
+# BOND_TYPES = {t: i for i, t in enumerate(BondType.names.values())}
+# BOND_NAMES = {i: t for i, t in enumerate(BondType.names.keys())}
 
 
 def parse_conf_list(conf_list, smiles=None):
-    # data_list = [parse_drug3d_mol(conf) for conf in conf_list]
-    
     element = []
     bond_index = []
     bond_type = []
@@ -87,8 +95,8 @@ def parse_drug3d_mol(mol, smiles=None):
         row += [b_index[0], b_index[1]]
         col += [b_index[1], b_index[0]]
     
-    bond_type = np.array(bond_type, dtype=np.int_)
-    bond_index = np.array([row, col],dtype=np.int_)
+    bond_type = np.array(bond_type, dtype=np.long)
+    bond_index = np.array([row, col],dtype=np.long)
 
     perm = (bond_index[0] * num_atoms + bond_index[1]).argsort()
     bond_index = bond_index[:, perm]
