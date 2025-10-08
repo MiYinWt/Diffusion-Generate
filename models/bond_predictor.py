@@ -3,7 +3,7 @@ from torch.nn import Module
 from torch.nn import functional as F
 from torch_geometric.nn import knn_graph
 from models.transition import ContigousTransition, GeneralCategoricalTransition
-from models.egnn import EgnnNet
+from models.graph import NodeEdgeNet
 from models.common import *
 from models.diffusion import *
 
@@ -43,7 +43,7 @@ class BondPredictor(Module):
         if self.num_timesteps != 0:
             self.time_emb = GaussianSmearing(stop=self.num_timesteps, num_gaussians=time_dim, type_='linear')
         # # predictor
-        self.encoder = EgnnNet(config.node_dim, config.edge_dim, **config.encoder)
+        self.encoder = NodeEdgeNet(config.node_dim, config.edge_dim, **config.encoder)
         self.edge_decoder = MLP(config.edge_dim + config.node_dim, num_edge_types, config.edge_dim, num_layer=3)
         
         self.edge_weight = torch.tensor([0.1]+[1.]*(self.num_edge_types-1), dtype=torch.float32)
@@ -96,10 +96,6 @@ class BondPredictor(Module):
     def _get_edge_index(self, x, batch, ligand_mask):
         if self.cutoff_mode == "knn":
             edge_index = knn_graph(x, k=self.k, batch=batch, flow="target_to_source")
-        elif self.cutoff_mode == "hybrid":
-            edge_index = batch_hybrid_edge_connection(
-                x, k=self.k, ligand_mask=ligand_mask, batch=batch, add_p_index=True
-            )
         else:
             raise ValueError(
                 f"Unsupported cutoff mode: {self.cutoff_mode}! Please select cutoff mode among knn, hybrid."

@@ -36,7 +36,7 @@ class ProteinLigandDataset(Dataset):
             os.path.dirname(self.path), os.path.basename(self.path) + f"_processed_{version}.lmdb"
         )
         self.transform = transform
-        self.database = None
+        self.db = None
         self.keys = None
 
         if not os.path.exists(self.processed_path):
@@ -56,7 +56,7 @@ class ProteinLigandDataset(Dataset):
 
         num_skipped = 0
         with db.begin(write=True, buffers=True) as txn:
-            for i, (pocket_fn, _, ligand_fn, _) in enumerate(tqdm(index)):
+            for i, (pocket_fn, ligand_fn, *_) in enumerate(tqdm(index)):
                 if pocket_fn is None: continue
                 try:
                     data_prefix = self.path
@@ -82,27 +82,26 @@ class ProteinLigandDataset(Dataset):
         db.close()
 
     def _build_db(self):
-        assert self.database is None
-        self.database = lmdb.open(
+        assert self.db is None
+        self.db = lmdb.open(
             self.processed_path, map_size=10*(1024*1024*1024), create=False, 
             subdir=False, readonly=True, lock=False, readahead=False, meminit=False,
         )
-        with self.database.begin() as db:
+        with self.db.begin() as db:
             self.keys = list(db.cursor().iternext(values=False))
 
     def __len__(self):
-        if self.database is None:
+        if self.db is None:
             self._build_db()
         return len(self.keys)
 
     def get_ori_data(self, idx):
-        if self.database is None:
+        if self.db is None:
             self._build_db()
         key = self.keys[idx]
-        data = pickle.loads(self.database.begin().get(key))
+        data = pickle.loads(self.db.begin().get(key))
         data = ProteinLigandData(**data)
         data.id = idx
-        assert data.protein_pos.size(0) > 0
         return data
 
     def __getitem__(self, idx):

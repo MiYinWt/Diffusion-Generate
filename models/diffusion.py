@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import torch.nn as nn
-
+from torch_scatter import scatter_sum, scatter_mean
 
 class TimeEmbedder(nn.Module):
     def __init__(self, dim, total_time):
@@ -192,11 +192,64 @@ def get_beta_schedule(beta_schedule, num_timesteps, **kwargs):
     return betas
 
 
-# def get_segment_schedule(time_intervals, segment_diff):
-#     t0 = 0
-#     betas = []
-#     for i, t1 in enumerate(time_intervals):
-#         betas_seg = advance_schedule(t1 - t0, **segment_diff[i])
-#         betas.extend(betas_seg)
-#         t0 = t1
-#     return np.array(betas)
+def compose(protein_h, protein_pos, protein_batch, ligand_h, ligand_pos, ligand_batch):
+    all_batch = torch.cat([ligand_batch, protein_batch], dim=0)
+    sort_idx = torch.sort(all_batch, stable=True).indices
+    all_batch = all_batch[sort_idx]
+
+    ligand_mask = torch.cat([
+        torch.ones(ligand_batch.size(0), device=ligand_batch.device).bool(),
+        torch.zeros(protein_batch.size(0), device=protein_batch.device).bool()
+    ], dim=0)[sort_idx]
+    all_h = torch.cat([ligand_h, protein_h], dim=0)[sort_idx]
+    all_pos = torch.cat([ligand_pos, protein_pos], dim=0)[sort_idx]
+
+    return all_h, all_pos, all_batch, ligand_mask
+
+def edge_compose(sub_edge_h, sub_edge_index, sub_edge_batch, ligand_edge_h, ligand_edge_index, ligand_edge_batch):
+    all_batch = torch.cat([ligand_edge_batch, sub_edge_batch], dim=0)
+
+    ligand_edge_mask = torch.cat([
+        torch.ones(ligand_edge_batch.size(0), device=ligand_edge_batch.device).bool(),
+        torch.zeros(sub_edge_batch.size(0), device=sub_edge_batch.device).bool()
+    ], dim=0)
+    all_edge_h = torch.cat([ligand_edge_h, sub_edge_h], dim=0)
+    all_edge_index = torch.cat([ligand_edge_index, sub_edge_index], dim=1)
+
+    return all_edge_h, all_edge_index, all_batch, ligand_edge_mask
+
+def frag_ligand_compose(frag_h, frag_pos, frag_batch, ligand_h, ligand_pos, ligand_batch):
+    all_batch = torch.cat([ligand_batch, frag_batch], dim=0)
+
+    ligand_mask = torch.cat([
+        torch.ones(ligand_batch.size(0), device=ligand_batch.device).bool(),
+        torch.zeros(frag_batch.size(0), device=frag_batch.device).bool()
+    ], dim=0)
+    all_h = torch.cat([ligand_h, frag_h], dim=0)
+    all_pos = torch.cat([ligand_pos, frag_pos], dim=0)
+
+    return all_h, all_pos, all_batch, ligand_mask
+
+def center_pos(protein_pos, ligand_pos, protein_batch, ligand_batch, mode="protein"):
+    if mode == "none":
+        offset = 0.
+        pass
+    elif mode == "protein":
+        offset = scatter_mean(protein_pos, protein_batch, dim=0)
+        protein_pos = protein_pos - offset[protein_batch]
+        ligand_pos = ligand_pos - offset[ligand_batch]
+    else:
+        raise NotImplementedError
+    return protein_pos, ligand_pos, offset
+
+def get_fragment_mask(ligand_batch, frag_batch):
+    unique_molecule_indices = torch.unique(ligand_batch)
+    fragment_masks = []
+    for molecule_index in unique_molecule_indices:
+        fragment_indices = torch.where(frag_batch == molecule_index)[0]
+        ligand_indices = torch.where(ligand_batch == molecule_index)[0]
+        fragment_mask = torch.zeros_like(ligand_batch[ligand_indices], dtype=torch.bool)
+        fragment_mask[:len(fragment_indices)] = True
+        fragment_masks.append(fragment_mask)
+    frag_mask = torch.cat(fragment_masks)
+    return frag_mask

@@ -9,7 +9,7 @@ class ProteinLigandData(Data):
     @staticmethod
     def from_drug_dicts(protein_dict=None, ligand_dict=None, **kwargs):
         instance = ProteinLigandData(**kwargs)
-        if protein_dict is None:
+        if protein_dict is not None:
             for key, item in protein_dict.items():
                 instance['protein_' + key] = item
         if ligand_dict is not None:

@@ -10,17 +10,16 @@ import torch
 torch.multiprocessing.set_sharing_strategy('file_system')
 from sklearn.metrics import roc_auc_score
 from torch.nn.utils import clip_grad_norm_
-import torch.utils.tensorboard
 from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import Compose
 
 from models.bond_predictor import BondPredictor
-from utils.dataset import get_dataset
+from datasets.dataset import get_dataset
 import utils.transforms as transforms
 from utils.misc import *
-from utils.train_utils import *
+from utils.train import *
 
-# Usage: python scripts/train_bond.py --config ./configs/train/train_bond.yml --device cuda:0 --logdir ./bond_logs
+# Usage: python scripts/train_bondpred.py --config ./configs/train_configs/train_bondpred.yml --device cuda:0 --logdir ./logs/bondpred
 def get_auroc(y_true, y_pred):
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
