@@ -52,9 +52,9 @@ def process_item(item, args):
 
 
 if __name__ == '__main__':
-    # Useage: python ./datas/data_preparation/extract_pockets.py --source ./datas/crossdocked2020/rmsd1.0 --dest ./datas/crossdocked2020/pocket10 --radius 10
+    # Useage: python ./datas/data_preparation/extract_pockets.py --source ./datas/crossdocked2020/crossdocked_v1.1_rmsd1.0 --dest ./datas/crossdocked2020/crossdocked_v1.1_rmsd1.0_pocket10  --radius 10
     parser = argparse.ArgumentParser()
-    parser.add_argument('--source', type=str, default='./datas/crossdocked2020/rmsd1.0')
+    parser.add_argument('--source', type=str, default='./datas/crossdocked2020/crossdocked_v1.1_rmsd1.0')
     parser.add_argument('--dest', type=str, required=True)
     parser.add_argument('--radius', type=int, default=10)
     parser.add_argument('--num_workers', type=int, default=16)

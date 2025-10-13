@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.special import softmax
-from datasets.data import ProteinLigandData
+from datasets.dataset import ProteinLigandData
 import utils.data as utils_data
 
 
@@ -151,7 +151,7 @@ class FeatureComplex(object):
     def __call__(self, data: ProteinLigandData):
         data.protein_num_atoms = len(data.protein_element)
         element = data.protein_element.view(-1, 1) == self.protein_atomic_numbers.view(1, -1)
-        amino_acid = F.one_hot(data.protein_atom_to_aa_type, num_classes=self.max_num_aa)
+        amino_acid = F.one_hot(data.protein_atom_to_aa_type.long(), num_classes=self.max_num_aa)
         is_backbone = data.protein_is_backbone.view(-1, 1).long()
         x = torch.cat([element, amino_acid, is_backbone], dim=-1)
         data.protein_atom_feat = x

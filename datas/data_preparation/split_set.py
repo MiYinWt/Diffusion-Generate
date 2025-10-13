@@ -35,17 +35,17 @@ def get_unique_pockets(dataset, raw_id, used_pdb, num_pockets):
 
 
 if __name__ == '__main__':
-     # Useage: python ./datas/data_preparation/split_set.py --path ./datas/crossdocked2020/pocket10 --dest ./datas/crossdocked2020/crossdocked_pocket10_pose_split.pt --train 42268 --val 4636 --test 100
+     # Useage: python ./datas/data_preparation/split_set.py --path ./datas/crossdocked2020/crossdocked_v1.1_rmsd1.0_pocket10 --dest ./datas/crossdocked2020/crossdocked_pocket10_pose_split.pt
     parser = argparse.ArgumentParser()
-    parser.add_argument('--path', type=str, default='./datas/crossdocked2020/pocket10')
+    parser.add_argument('--path', type=str, default='./datas/crossdocked2020/crossdocked_v1.1_rmsd1.0_pocket10')
     parser.add_argument('--dest', type=str, default='./datas/crossdocked2020/crossdocked_pocket10_pose_split.pt')
-    parser.add_argument('--fixed_split', type=str, default='./datas/crossdocked2020/split_by_name.pt')
+    parser.add_argument('--fixed_split', type=str, default= None)
     parser.add_argument('--train', type=int, default=100000)
-    parser.add_argument('--val', type=int, default=1000)
-    parser.add_argument('--test', type=int, default=20000)
+    parser.add_argument('--val', type=int, default=100)
+    parser.add_argument('--test', type=int, default=100)
     parser.add_argument('--val_num', type=int, default=-1)
     parser.add_argument('--test_num', type=int, default=-1)
-    parser.add_argument('--seed', type=int, default=2025)
+    parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
     dataset = ProteinLigandDataset(args.path)
@@ -57,22 +57,16 @@ if __name__ == '__main__':
         name_id_dict = {}
         invalid_count = 0
         for idx, data in enumerate(tqdm(dataset, desc='Indexing')):
-            if data is None or data.protein_pos.size(0) == 0:
-                invalid_count += 1
-                continue  
-            else:
-                name_id_dict[data.protein_filename + data.ligand_filename] = idx
-        
-
+            name_id_dict[data.protein_filename + data.ligand_filename] = idx
 
         selected_ids = {'train': [], 'test': []}
-        for split in ['train', 'test', 'val']:
+        for split in ['train', 'test']:
             print(f'Selecting {split} split...')
             for fn in fixed_split[split]:
                 if (fn[0] + fn[1]) in name_id_dict:
                     selected_ids[split].append(name_id_dict[fn[0] + fn[1]])
-                #else:
-                    #print(f'Warning: data with PDB fn {fn[0]} and ligand fn {fn[1]} not found!')
+                else:
+                    print(f'Warning: data with PDB fn {fn[0]} and ligand fn {fn[1]} not found!')
         train_id, val_id, test_id = selected_ids['train'], [], selected_ids['test']
 
     else:
@@ -112,6 +106,5 @@ if __name__ == '__main__':
             )
     
     torch.save({"train": train_id, "val": val_id, "test": test_id}, args.dest)
-    print(f"Skipping {invalid_count} invalid datas")
     print('Train %d, Validation %d, Test %d.' % (len(train_id), len(val_id), len(test_id)))
     print('Done.')

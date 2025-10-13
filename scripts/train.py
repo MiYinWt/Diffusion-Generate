@@ -10,23 +10,42 @@ import torch
 torch.multiprocessing.set_sharing_strategy('file_system')
 from sklearn.metrics import roc_auc_score
 from torch.nn.utils import clip_grad_norm_
+import torch.utils.tensorboard
 from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import Compose
-from torch.utils.tensorboard import SummaryWriter
 
-from models.bond_predictor import BondPredictor
-from datasets.dataset import get_dataset
+from models.model import DiffGen
 import utils.transforms as transforms
+from datasets.dataset import get_dataset
 from utils.misc import *
 from utils.train import *
 
-# Usage: python scripts/train_bondpred.py --config ./configs/train_configs/train_bondpred.yml --device cuda:0 --logdir ./logs/bondpred
 
+def get_auroc(y_true, y_pred):
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+    classes = np.unique(y_true)
+    sum_auroc = 0
+    for c in classes:
+        y_pred_class = np.nan_to_num(y_pred[:, c], nan=0, posinf=1e10, neginf=-1e10)
+        auroc = roc_auc_score((y_true == c).astype(int), y_pred_class, multi_class='ovr', labels=[c])
+        sum_auroc += auroc * np.sum(y_true == c)
+    avg_auroc = sum_auroc / len(y_true)
+    return avg_auroc
 
 def train(args, config, model, train_iterator, optimizer, scaler, logger, writer, it):
     optimizer.zero_grad(set_to_none=True)
     batch = next(train_iterator).to(args.device)
+    batch_size = batch.num_graphs
 
+    batch_logp = torch.tensor([float(item) for item in batch.logp], device=args.device).unsqueeze(-1)
+    batch_tpsa = torch.tensor([float(item) for item in batch.tpsa], device=args.device).unsqueeze(-1)
+    batch_sa = torch.tensor([float(item) for item in batch.sa], device=args.device).unsqueeze(-1)
+    batch_qed = torch.tensor([float(item) for item in batch.qed], device=args.device).unsqueeze(-1)
+    batch_aff = torch.tensor([float(item) for item in batch.aff], device=args.device).unsqueeze(-1)
+    batch_lab = torch.cat((batch_logp, batch_tpsa, batch_sa, batch_qed, batch_aff), dim=1)
+    batch_lab[np.where(np.random.rand(batch_size)<config.train.threshold)] = 0
+    
     protein_noise = torch.randn_like(batch.protein_pos) * config.train.pos_noise_std
     pos_noise = torch.randn_like(batch.ligand_pos) * config.train.pos_noise_std
     with torch.autocast(device_type='cuda', dtype=torch.float32, enabled=config.train.use_amp):
@@ -41,6 +60,7 @@ def train(args, config, model, train_iterator, optimizer, scaler, logger, writer
             halfedge_index = batch.ligand_halfedge_index,
             halfedge_batch = batch.ligand_halfedge_type_batch,
             num_mol = batch.num_graphs,
+            batch_lab = batch_lab
         )
     loss = loss_dict['loss']
     scaler.scale(loss).backward()
@@ -51,8 +71,8 @@ def train(args, config, model, train_iterator, optimizer, scaler, logger, writer
 
     if it % config.train.train_report_iter == 0:
         log_info = '[Train] Iter %d | ' % it + ' | '.join([
-            '%s: %.6f' % (k, v.item()) for k, v in loss_dict.items()
-        ])
+        '%s: %.6f' % (k, v.item()) for k, v in loss_dict.items()
+    ])
         logger.info(log_info)
         for k, v in loss_dict.items():
             writer.add_scalar('train/%s' % k, v.item(), it)
@@ -63,14 +83,24 @@ def train(args, config, model, train_iterator, optimizer, scaler, logger, writer
 def validate(args, config, model, val_loader, scheduler, logger, writer, it):
     sum_n =  0   # num of loss
     sum_loss_dict = {} 
+    all_pred_v, all_true_v = [], []
     all_pred_half_e, all_true_half_e = [], []
     with torch.no_grad():
         model.eval()
         for batch in tqdm(val_loader, desc='Validate'):
             batch = batch.to(args.device)
+            batch_size = batch.num_graphs
+
+            batch_logp = torch.tensor([float(item) for item in batch.logp], device=args.device).unsqueeze(-1)
+            batch_tpsa = torch.tensor([float(item) for item in batch.tpsa], device=args.device).unsqueeze(-1)
+            batch_sa = torch.tensor([float(item) for item in batch.sa], device=args.device).unsqueeze(-1)
+            batch_qed = torch.tensor([float(item) for item in batch.qed], device=args.device).unsqueeze(-1)
+            batch_aff = torch.tensor([float(item) for item in batch.aff], device=args.device).unsqueeze(-1)
+            batch_lab = torch.cat((batch_logp, batch_tpsa, batch_sa, batch_qed, batch_aff), dim=1)
+            batch_lab[np.where(np.random.rand(batch_size)<config.train.threshold)] = 0
+
             with torch.autocast(device_type='cuda', dtype=torch.float32, enabled=config.train.use_amp):
                 loss_dict, pred_dict = model.get_loss(
-                    # compose
                     protein_node = batch.protein_atom_feat.float(), 
                     protein_pos = batch.protein_pos, 
                     protein_batch = batch.protein_element_batch,
@@ -81,6 +111,7 @@ def validate(args, config, model, val_loader, scheduler, logger, writer, it):
                     halfedge_index = batch.ligand_halfedge_index,
                     halfedge_batch = batch.ligand_halfedge_type_batch,
                     num_mol = batch.num_graphs,
+                    batch_lab = batch_lab
                 )
             if len(sum_loss_dict) == 0:
                 sum_loss_dict = {k: v.item() for k, v in loss_dict.items()}
@@ -88,6 +119,8 @@ def validate(args, config, model, val_loader, scheduler, logger, writer, it):
                 for key in sum_loss_dict.keys():
                     sum_loss_dict[key] += loss_dict[key].item()
             sum_n += 1
+            all_pred_v.append(pred_dict["pred_ligand_node"].cpu().numpy())
+            all_true_v.append(batch.ligand_atom_feat_full.cpu().numpy())
             all_pred_half_e.append(pred_dict["pred_ligand_halfedge"].cpu().numpy())
             all_true_half_e.append(batch.ligand_halfedge_type.cpu().numpy())
     
@@ -102,7 +135,9 @@ def validate(args, config, model, val_loader, scheduler, logger, writer, it):
     else:
         scheduler.step()
 
+    atom_auroc = get_auroc(np.concatenate(all_true_v), np.concatenate(all_pred_v, axis=0))
     bond_auroc = get_auroc(np.concatenate(all_true_half_e), np.concatenate(all_pred_half_e, axis=0))
+    avg_loss_dict['atom_auroc'] = atom_auroc
     avg_loss_dict['bond_auroc'] = bond_auroc
 
     log_info = '[Validate] Iter %d | ' % it + ' | '.join([
@@ -114,17 +149,6 @@ def validate(args, config, model, val_loader, scheduler, logger, writer, it):
     writer.flush()
     return avg_loss_dict
 
-def get_auroc(y_true, y_pred):
-    y_true = np.array(y_true)
-    y_pred = np.array(y_pred)
-    sum_auroc = 0
-    classes = set(y_true)
-    for c in classes:
-        auroc = roc_auc_score(y_true == c, y_pred[:, c])
-        sum_auroc += auroc * np.sum(y_true == c)
-    avg_auroc = sum_auroc / len(y_true)
-    return avg_auroc
-    
 def main(args):
     # Load configs
     config = load_config(args.config)
@@ -133,7 +157,7 @@ def main(args):
 
     # Logging
     log_dir = get_new_log_dir(args.logdir, prefix=config_name)
-    # log_dir = args.logdir
+    #log_dir = args.logdir
     ckpt_dir = os.path.join(log_dir, 'checkpoints')
     os.makedirs(ckpt_dir, exist_ok=True)
     success_ckpt_dir = os.path.join(ckpt_dir, 'success')
@@ -142,7 +166,7 @@ def main(args):
     os.makedirs(fail_ckpt_dir, exist_ok=True)
 
     logger = get_logger('train', log_dir)
-    writer = SummaryWriter(log_dir)
+    writer = torch.utils.tensorboard.SummaryWriter(log_dir)
     logger.info(args)
     logger.info(config)
     shutil.copyfile(args.config, os.path.join(log_dir, os.path.basename(args.config)))
@@ -152,9 +176,10 @@ def main(args):
         config.data.transform.ligand_atom_mode, 
         sample=config.data.transform.sample
     )
-    transform = Compose([
-        featurizer,
-    ])
+    transform_list = [featurizer]
+    if config.data.transform.random_rot:
+        transform_list.append(transforms.RandomRotation())
+    transform = Compose(transform_list)
 
     # Datasets and loaders
     logger.info('Loading dataset...')
@@ -184,12 +209,15 @@ def main(args):
 
     # Model
     logger.info('Building model...')
-    model = BondPredictor(
-        config=config.model,
-        protein_node_types=featurizer.protein_feat_dim,
-        ligand_node_types=featurizer.atom_feat_dim,
-        num_edge_types=featurizer.bond_feat_dim
-    ).to(args.device)
+    if config.model.name == 'diffgen':
+        model = DiffGen(
+            config=config.model,
+            protein_node_types=featurizer.protein_feat_dim,
+            ligand_node_types=featurizer.atom_feat_dim,
+            num_edge_types=featurizer.bond_feat_dim
+        ).to(args.device)
+    else:
+        raise NotImplementedError('Model %s not implemented' % config.model.name)
     num_parameters = np.sum([p.numel() for p in model.parameters() if p.requires_grad])
     logger.info(f'Num of trainable parameters: {num_parameters / 1e6:.4f} M.')
     logger.info(f'protein feature dim: {featurizer.protein_feat_dim}, ligand atom feature dim: {featurizer.atom_feat_dim}, ligand bond feature dim: {featurizer.bond_feat_dim}.')
@@ -207,7 +235,6 @@ def main(args):
             f"Loading model from checkpoint: {config.train.resume_ckpt}... at {resume_step} step."
         )
         checkpoint = torch.load(os.path.join(fail_ckpt_dir, config.train.resume_ckpt), map_location=args.device)
-        #checkpoint = torch.load(os.path.join(success_ckpt_dir, config.train.resume_ckpt), map_location=args.device)
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
@@ -225,8 +252,8 @@ def main(args):
     try:
         model.train()
         early_stop = 0
-        best_loss, best_bond_auroc, best_it = 1e9, 0, 0
-        # best_loss, best_bond_auroc, best_it = 0.438841, 0.941529, 4650000
+        best_loss, best_atom_auroc, best_bond_auroc, best_it = 1e9, 0, 0, 0
+        #best_loss, best_atom_auroc, best_bond_auroc, best_it = 2.417990, 0.934028, 0.956858, 206000
         for it in range(int(resume_step)+1, config.train.max_iters+1):
             try:
                 train(args, config, model, train_iterator, optimizer, scaler, logger, writer, it)
@@ -236,7 +263,7 @@ def main(args):
             if it % config.train.val_freq == 0 or it == config.train.max_iters:
                 loss_dict = validate(args, config, model, val_loader, scheduler, logger, writer, it)
                 if loss_dict['loss'] < best_loss:
-                    best_loss, best_bond_auroc, best_it = loss_dict['loss'], loss_dict['bond_auroc'], it
+                    best_loss, best_atom_auroc, best_bond_auroc, best_it = loss_dict['loss'], loss_dict['atom_auroc'], loss_dict['bond_auroc'], it
                     ckpt_path = os.path.join(success_ckpt_dir, '%d.pt' % it)
                     torch.save({
                         'config': config,
@@ -258,7 +285,7 @@ def main(args):
                     }, ckpt_path)
                     early_stop += 1
                     logger.info(
-                                f"Val loss is not improved at Iter {it}. Best val loss: {best_loss:.6f} and Best bond auroc: {best_bond_auroc:.6f} are achieved at Iter {best_it}."
+                                f"Val loss is not improved at Iter {it}. Best val loss: {best_loss:.6f} and Best atom auroc: {best_atom_auroc:.6f} and Best bond auroc: {best_bond_auroc:.6f} are achieved at Iter {best_it}."
                             )
                     logger.info('Early stop is {} for Iter {}'.format(early_stop, it))
 
@@ -271,10 +298,11 @@ def main(args):
 
 
 if __name__ == '__main__':
+    # Usage: python scripts/train.py --config ./configs/train/train.yml --device cuda:0 --logdir ./logs
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='./configs/train/train_bondpred.yml')
-    parser.add_argument('--device', type=str, default='cuda:0')
-    parser.add_argument('--logdir', type=str, default='./bond_logs')
+    parser.add_argument('--config', type=str, default='configs/train/train.yml')
+    parser.add_argument('--device', type=str, default='cuda:1')
+    parser.add_argument('--logdir', type=str, default='logs')
     args = parser.parse_args()
 
-    main(args)    
+    main(args)
