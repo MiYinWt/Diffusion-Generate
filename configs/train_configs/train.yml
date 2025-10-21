@@ -45,7 +45,7 @@ model:
 
 train:
   seed: 42
-  batch_size: 4
+  batch_size: 2
   num_workers: 4
   threshold: 0.1
   pin_memory: True
@@ -73,8 +73,8 @@ train:
 
 data:
   name: protein_ligand
-  path: datas/crossdocked2020/crossdocked_v1.1_rmsd1.0_pocket10
-  split: datas/crossdocked2020/crossdocked_pocket10_pose_split.pt
+  path: datas/PDBbind_v2020/PDBbind_v2020_pocket10
+  split: data/PDBbind_v2020/PDBbind_pocket10_split.pt
   transform:
     ligand_atom_mode: aromatic # [basic, aromatic, full]
     random_rot: False

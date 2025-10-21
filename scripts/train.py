@@ -37,14 +37,6 @@ def train(args, config, model, train_iterator, optimizer, scaler, logger, writer
     optimizer.zero_grad(set_to_none=True)
     batch = next(train_iterator).to(args.device)
     batch_size = batch.num_graphs
-
-    batch_logp = torch.tensor([float(item) for item in batch.logp], device=args.device).unsqueeze(-1)
-    batch_tpsa = torch.tensor([float(item) for item in batch.tpsa], device=args.device).unsqueeze(-1)
-    batch_sa = torch.tensor([float(item) for item in batch.sa], device=args.device).unsqueeze(-1)
-    batch_qed = torch.tensor([float(item) for item in batch.qed], device=args.device).unsqueeze(-1)
-    batch_aff = torch.tensor([float(item) for item in batch.aff], device=args.device).unsqueeze(-1)
-    batch_lab = torch.cat((batch_logp, batch_tpsa, batch_sa, batch_qed, batch_aff), dim=1)
-    batch_lab[np.where(np.random.rand(batch_size)<config.train.threshold)] = 0
     
     protein_noise = torch.randn_like(batch.protein_pos) * config.train.pos_noise_std
     pos_noise = torch.randn_like(batch.ligand_pos) * config.train.pos_noise_std
@@ -59,8 +51,7 @@ def train(args, config, model, train_iterator, optimizer, scaler, logger, writer
             halfedge_type = batch.ligand_halfedge_type,
             halfedge_index = batch.ligand_halfedge_index,
             halfedge_batch = batch.ligand_halfedge_type_batch,
-            num_mol = batch.num_graphs,
-            batch_lab = batch_lab
+            num_mol = batch_size,
         )
     loss = loss_dict['loss']
     scaler.scale(loss).backward()
@@ -90,15 +81,6 @@ def validate(args, config, model, val_loader, scheduler, logger, writer, it):
         for batch in tqdm(val_loader, desc='Validate'):
             batch = batch.to(args.device)
             batch_size = batch.num_graphs
-
-            batch_logp = torch.tensor([float(item) for item in batch.logp], device=args.device).unsqueeze(-1)
-            batch_tpsa = torch.tensor([float(item) for item in batch.tpsa], device=args.device).unsqueeze(-1)
-            batch_sa = torch.tensor([float(item) for item in batch.sa], device=args.device).unsqueeze(-1)
-            batch_qed = torch.tensor([float(item) for item in batch.qed], device=args.device).unsqueeze(-1)
-            batch_aff = torch.tensor([float(item) for item in batch.aff], device=args.device).unsqueeze(-1)
-            batch_lab = torch.cat((batch_logp, batch_tpsa, batch_sa, batch_qed, batch_aff), dim=1)
-            batch_lab[np.where(np.random.rand(batch_size)<config.train.threshold)] = 0
-
             with torch.autocast(device_type='cuda', dtype=torch.float32, enabled=config.train.use_amp):
                 loss_dict, pred_dict = model.get_loss(
                     protein_node = batch.protein_atom_feat.float(), 
@@ -110,8 +92,7 @@ def validate(args, config, model, val_loader, scheduler, logger, writer, it):
                     halfedge_type = batch.ligand_halfedge_type,
                     halfedge_index = batch.ligand_halfedge_index,
                     halfedge_batch = batch.ligand_halfedge_type_batch,
-                    num_mol = batch.num_graphs,
-                    batch_lab = batch_lab
+                    num_mol = batch_size,
                 )
             if len(sum_loss_dict) == 0:
                 sum_loss_dict = {k: v.item() for k, v in loss_dict.items()}
@@ -149,7 +130,14 @@ def validate(args, config, model, val_loader, scheduler, logger, writer, it):
     writer.flush()
     return avg_loss_dict
 
-def main(args):
+if __name__ == '__main__':
+    # Usage: python scripts/train.py --config ./configs/train/train.yml --device cuda:0 --logdir ./logs
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default='configs/train/train.yml')
+    parser.add_argument('--device', type=str, default='cuda:1')
+    parser.add_argument('--logdir', type=str, default='logs')
+    args = parser.parse_args()
+    
     # Load configs
     config = load_config(args.config)
     config_name = os.path.basename(args.config)[:os.path.basename(args.config).rfind('.')]
@@ -295,14 +283,3 @@ def main(args):
 
     except KeyboardInterrupt:
         logger.info('Terminating...')
-
-
-if __name__ == '__main__':
-    # Usage: python scripts/train.py --config ./configs/train/train.yml --device cuda:0 --logdir ./logs
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='configs/train/train.yml')
-    parser.add_argument('--device', type=str, default='cuda:1')
-    parser.add_argument('--logdir', type=str, default='logs')
-    args = parser.parse_args()
-
-    main(args)

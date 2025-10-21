@@ -8,14 +8,14 @@ model:
   cutoff_mode: knn
   encoder:
     backbone: EGNN
-    num_blocks: 8
+    num_blocks: 9
     cutoff: 20
     use_gate: True
     update_edge: True
     update_pos: False  # pos should not be updated
   diff:
     num_timesteps: 1000
-    time_dim: 10
+    time_dim: 20
     categorical_space: discrete
     diff_pos:
       beta_schedule: advance
@@ -34,9 +34,9 @@ train:
   batch_size: 4
   num_workers: 0
   pin_memory: True
-  max_iters: 300000
+  max_iters: 600000
   val_freq: 1000
-  train_report_iter: 1
+  train_report_iter: 100
   pos_noise_std: 0.05
   max_grad_norm: 50.0
   use_amp: True
@@ -47,19 +47,19 @@ train:
   optimizer:
     type: adamw
     lr: 1.e-4
-    weight_decay: 1.e-8
+    weight_decay: 1.e-4
     beta1: 0.99
     beta2: 0.999
   scheduler:
     type: plateau
     factor: 0.8
-    patience: 1000
-    min_lr: 1.e-5
+    patience: 10
+    min_lr: 1.e-8
 
 data:
   name: protein_ligand
-  path: datas/crossdocked2020/crossdocked_v1.1_rmsd1.0_pocket10
-  split: datas/crossdocked2020/crossdocked_pocket10_pose_split.pt
+  path: datas/PDBbind_v2020/PDBbind_v2020_pocket10
+  split: datas/PDBbind_v2020/PDBbind_pocket10_split.pt
   transform:
     ligand_atom_mode: aromatic # [basic, aromatic, full]
     random_rot: False

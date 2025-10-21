@@ -35,10 +35,10 @@ def get_unique_pockets(dataset, raw_id, used_pdb, num_pockets):
 
 
 if __name__ == '__main__':
-     # Useage: python ./datas/data_preparation/split_set.py --path ./datas/crossdocked2020/crossdocked_v1.1_rmsd1.0_pocket10 --dest ./datas/crossdocked2020/crossdocked_pocket10_pose_split.pt
+     # Useage: python ./datas/data_preparation/split_set.py --path ./datas/PDBbind_v2020/PDBbind_v2020_pocket10 --dest ./datas/PDBbind_v2020/PDBbind_pocket10_split.pt --train 17000 --val 1800 --test 100
     parser = argparse.ArgumentParser()
-    parser.add_argument('--path', type=str, default='./datas/crossdocked2020/crossdocked_v1.1_rmsd1.0_pocket10')
-    parser.add_argument('--dest', type=str, default='./datas/crossdocked2020/crossdocked_pocket10_pose_split.pt')
+    parser.add_argument('--path', type=str, required=True)
+    parser.add_argument('--dest', type=str, required=True)
     parser.add_argument('--fixed_split', type=str, default= None)
     parser.add_argument('--train', type=int, default=100000)
     parser.add_argument('--val', type=int, default=100)

@@ -2,6 +2,7 @@ import sys
 import os
 import shutil
 import argparse
+import gc
 import numpy as np
 sys.path.append('.')
 
@@ -46,8 +47,13 @@ def train(args, config, model, train_iterator, optimizer, scaler, logger, writer
     scaler.scale(loss).backward()
     scaler.unscale_(optimizer)
     orig_grad_norm = clip_grad_norm_(model.parameters(), config.train.max_grad_norm)
-    scaler.step(optimizer)
-    scaler.update()
+    try:
+        scaler.step(optimizer)
+    except Exception:
+        scaler.update()
+        raise
+    else:
+        scaler.update()
 
     if it % config.train.train_report_iter == 0:
         log_info = '[Train] Iter %d | ' % it + ' | '.join([
@@ -125,7 +131,14 @@ def get_auroc(y_true, y_pred):
     avg_auroc = sum_auroc / len(y_true)
     return avg_auroc
     
-def main(args):
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default='./configs/train/train_bondpred.yml')
+    parser.add_argument('--device', type=str, default='cuda:0')
+    parser.add_argument('--logdir', type=str, default='./bond_logs')
+    args = parser.parse_args()
+
     # Load configs
     config = load_config(args.config)
     config_name = os.path.basename(args.config)[:os.path.basename(args.config).rfind('.')]
@@ -230,6 +243,8 @@ def main(args):
         for it in range(int(resume_step)+1, config.train.max_iters+1):
             try:
                 train(args, config, model, train_iterator, optimizer, scaler, logger, writer, it)
+                ## torch.cuda.empty_cache()
+                gc.collect()
             except RuntimeError as e:
                 logger.error('Runtime Error ' + str(e))
                 logger.error('Skipping Iteration %d' % it)
@@ -268,13 +283,3 @@ def main(args):
 
     except KeyboardInterrupt:
         logger.info('Terminating...')
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='./configs/train/train_bondpred.yml')
-    parser.add_argument('--device', type=str, default='cuda:0')
-    parser.add_argument('--logdir', type=str, default='./bond_logs')
-    args = parser.parse_args()
-
-    main(args)    
