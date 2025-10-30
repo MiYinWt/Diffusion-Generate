@@ -20,6 +20,7 @@ from datasets.dataset import get_dataset
 from utils.misc import *
 from utils.train import *
 
+# Usage: python scripts/train.py --config ./configs/train_configs/train.yml --device cuda:0 --logdir ./logs/gen
 
 def get_auroc(y_true, y_pred):
     y_true = np.array(y_true)
@@ -52,9 +53,16 @@ def train(args, config, model, train_iterator, optimizer, scaler, logger, writer
             halfedge_index = batch.ligand_halfedge_index,
             halfedge_batch = batch.ligand_halfedge_type_batch,
             num_mol = batch_size,
+            train = True
         )
-    loss = loss_dict['loss']
-    scaler.scale(loss).backward()
+    loss,energy = loss_dict['loss'],loss_dict['energy']
+    
+    energy_loss = (energy * (it/500000) * 0.1).abs()
+    total_loss = loss + energy_loss
+
+    # total_loss = loss_dict['loss']
+
+    scaler.scale(total_loss).backward()
     scaler.unscale_(optimizer)
     orig_grad_norm = clip_grad_norm_(model.parameters(), config.train.max_grad_norm)
     scaler.step(optimizer)
@@ -93,6 +101,7 @@ def validate(args, config, model, val_loader, scheduler, logger, writer, it):
                     halfedge_index = batch.ligand_halfedge_index,
                     halfedge_batch = batch.ligand_halfedge_type_batch,
                     num_mol = batch_size,
+                    train = False
                 )
             if len(sum_loss_dict) == 0:
                 sum_loss_dict = {k: v.item() for k, v in loss_dict.items()}
@@ -131,10 +140,9 @@ def validate(args, config, model, val_loader, scheduler, logger, writer, it):
     return avg_loss_dict
 
 if __name__ == '__main__':
-    # Usage: python scripts/train.py --config ./configs/train/train.yml --device cuda:0 --logdir ./logs
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='configs/train/train.yml')
-    parser.add_argument('--device', type=str, default='cuda:1')
+    parser.add_argument('--device', type=str, default='cuda:0')
     parser.add_argument('--logdir', type=str, default='logs')
     args = parser.parse_args()
     
@@ -148,10 +156,6 @@ if __name__ == '__main__':
     #log_dir = args.logdir
     ckpt_dir = os.path.join(log_dir, 'checkpoints')
     os.makedirs(ckpt_dir, exist_ok=True)
-    success_ckpt_dir = os.path.join(ckpt_dir, 'success')
-    os.makedirs(success_ckpt_dir, exist_ok=True)
-    fail_ckpt_dir = os.path.join(ckpt_dir, 'fail')
-    os.makedirs(fail_ckpt_dir, exist_ok=True)
 
     logger = get_logger('train', log_dir)
     writer = torch.utils.tensorboard.SummaryWriter(log_dir)
@@ -215,34 +219,9 @@ if __name__ == '__main__':
     scheduler = get_scheduler(config.train.scheduler, optimizer)
     scaler = torch.cuda.amp.GradScaler(enabled=config.train.use_amp)
 
-    # Resume or not
-    resume_step = 0
-    if config.train.resume:
-        resume_step = config.train.resume_ckpt.split('.')[0]
-        logger.info(
-            f"Loading model from checkpoint: {config.train.resume_ckpt}... at {resume_step} step."
-        )
-        checkpoint = torch.load(os.path.join(fail_ckpt_dir, config.train.resume_ckpt), map_location=args.device)
-        model.load_state_dict(checkpoint['model'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        scheduler.load_state_dict(checkpoint['scheduler'])
-        model.to(args.device)
-
-    # Load previous model parameters or not
-    if config.train.prev_model:
-        logger.info(
-            f"Loading model from checkpoint: {config.train.prev_ckpt}."
-        )
-        checkpoint = torch.load(config.train.prev_ckpt, map_location=args.device)
-        model.load_state_dict(checkpoint['model'], strict=False)
-        model.to(args.device)
-
     try:
         model.train()
-        early_stop = 0
-        best_loss, best_atom_auroc, best_bond_auroc, best_it = 1e9, 0, 0, 0
-        #best_loss, best_atom_auroc, best_bond_auroc, best_it = 2.417990, 0.934028, 0.956858, 206000
-        for it in range(int(resume_step)+1, config.train.max_iters+1):
+        for it in range(1, config.train.max_iters+1):
             try:
                 train(args, config, model, train_iterator, optimizer, scaler, logger, writer, it)
             except RuntimeError as e:
@@ -250,36 +229,15 @@ if __name__ == '__main__':
                 logger.error('Skipping Iteration %d' % it)
             if it % config.train.val_freq == 0 or it == config.train.max_iters:
                 loss_dict = validate(args, config, model, val_loader, scheduler, logger, writer, it)
-                if loss_dict['loss'] < best_loss:
-                    best_loss, best_atom_auroc, best_bond_auroc, best_it = loss_dict['loss'], loss_dict['atom_auroc'], loss_dict['bond_auroc'], it
-                    ckpt_path = os.path.join(success_ckpt_dir, '%d.pt' % it)
-                    torch.save({
-                        'config': config,
-                        'model': model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'scheduler': scheduler.state_dict(),
-                        'iteration': it,
-                    }, ckpt_path)
-                    early_stop = 0
-                    model.train()
-                else:
-                    ckpt_path = os.path.join(fail_ckpt_dir, '%d.pt' % it)
-                    torch.save({
-                        'config': config,
-                        'model': model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'scheduler': scheduler.state_dict(),
-                        'iteration': it,
-                    }, ckpt_path)
-                    early_stop += 1
-                    logger.info(
-                                f"Val loss is not improved at Iter {it}. Best val loss: {best_loss:.6f} and Best atom auroc: {best_atom_auroc:.6f} and Best bond auroc: {best_bond_auroc:.6f} are achieved at Iter {best_it}."
-                            )
-                    logger.info('Early stop is {} for Iter {}'.format(early_stop, it))
-
-                # if early_stop >= 20:
-                #     logger.info('Early Stopping!!! No Improvement on Loss for 20 validation Iters.')
-                #     break
-
+                ckpt_path = os.path.join(ckpt_dir, '%d.pt' % it)
+                torch.save({
+                    'config': config,
+                    'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),
+                    'iteration': it,
+                }, ckpt_path)
+                early_stop = 0
+                model.train()
     except KeyboardInterrupt:
         logger.info('Terminating...')

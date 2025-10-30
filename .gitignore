@@ -4,3 +4,6 @@ datas/geom_drug/*
 datas/PDBbind_v2020/*
 checkpoints/bondpred/*
 logs/*
+outputs/*
+*.pt
+fgfr1

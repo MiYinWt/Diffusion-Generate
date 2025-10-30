@@ -7,7 +7,29 @@ from models.transition import ContigousTransition, GeneralCategoricalTransition
 from models.graph import NodeEdgeNet
 from models.common import *
 from models.diffusion import *
+from utils.transforms import *
 
+VDWRADII = {
+    1: 1.1,
+    5: 2.1,
+    6: 1.90,
+    7: 1.8,
+    8: 1.7,
+    16: 2.0,
+    15: 2.1,
+    9: 1.5,
+    17: 1.8,
+    35: 2.0,
+    53: 2.2,
+    30: 1.2,
+    25: 1.2,
+    26: 1.2,
+    27: 1.2,
+    12: 1.2,
+    28: 1.2,
+    20: 1.2,
+    29: 1.2,
+}
 
 class DiffGen(Module):
     def __init__(self,
@@ -26,37 +48,24 @@ class DiffGen(Module):
         self.cutoff_mode = config.cutoff_mode
         self.center_pos_mode = config.center_pos_mode
         self.bond_len_loss = getattr(config, 'bond_len_loss', False)
-
+        self.ligand_atom_mode = 'aromatic'
         # # define beta and alpha
         self.define_betas_alphas(config.diff)
 
         # # embedding
-        if self.config.node_indicator:
-            node_dim = config.node_dim - 1
-        else:
-            node_dim = config.node_dim
+
+        node_dim = config.node_dim
         edge_dim = config.edge_dim
         time_dim = config.diff.time_dim
-        class_dim = config.class_dim
-        class_emb_dim = config.class_emb_dim
+
         self.protein_node_embedder = nn.Linear(protein_node_types, node_dim, bias=False) # protein element type
         self.protein_edge_embedder = nn.Linear(num_edge_types, edge_dim, bias=False) # protein bond type
-        if self.config.train_mode in ('ori', 'no_bond'):
-            self.ligand_node_embedder = nn.Linear(ligand_node_types, node_dim - time_dim - class_emb_dim, bias=False)  # ligand element type
-            self.ligand_edge_embedder = nn.Linear(num_edge_types, edge_dim - time_dim - class_emb_dim, bias=False) # ligand bond type
-        elif self.config.train_mode in ('no_lab', 'no_both'):
-            self.ligand_node_embedder = nn.Linear(ligand_node_types, node_dim - time_dim, bias=False)  # ligand element type
-            self.ligand_edge_embedder = nn.Linear(num_edge_types, edge_dim - time_dim, bias=False) # ligand bond type
+        self.ligand_node_embedder = nn.Linear(ligand_node_types, node_dim - time_dim, bias=False)  # ligand element type
+        self.ligand_edge_embedder = nn.Linear(num_edge_types, edge_dim - time_dim, bias=False) # ligand bond type
         self.time_emb = nn.Sequential(
             GaussianSmearing(stop=self.num_timesteps, num_gaussians=time_dim, type_='linear'),
         )
-        self.class_emb = nn.Sequential(
-            nn.Linear(class_dim, class_emb_dim * 4),
-            nn.LayerNorm(class_emb_dim * 4),
-            nn.GELU(),
-            nn.Linear(class_emb_dim * 4, class_emb_dim)
-        )
-        
+
         # # denoiser
         if config.denoiser.backbone == 'EGNN':
             self.denoiser = NodeEdgeNet(config.node_dim, config.edge_dim, **config.denoiser)
@@ -159,27 +168,17 @@ class DiffGen(Module):
         self, protein_node, protein_pos, protein_batch, 
         ligand_node_pert, ligand_pos_pert, ligand_batch,
         ligand_edge_pert, ligand_edge_index, ligand_edge_batch, 
-        t, lab
+        t
     ):
         """
         Predict Ligand at step `0` given perturbed Ligand at step `t` with hidden dims and time step
         """
         # 1 node, edge and time embedding
         time_embed_node = self.time_emb(t.index_select(0, ligand_batch))
-        class_embed_node = self.class_emb(lab.index_select(0, ligand_batch))
         time_embed_edge = self.time_emb(t.index_select(0, ligand_edge_batch))
-        class_embed_edge = self.class_emb(lab.index_select(0, ligand_edge_batch))
-        if self.config.train_mode in ('ori', 'no_bond'):
-            ligand_node_h_pert = torch.cat([self.ligand_node_embedder(ligand_node_pert), time_embed_node, class_embed_node], dim=-1)
-            ligand_edge_h_pert = torch.cat([self.ligand_edge_embedder(ligand_edge_pert), time_embed_edge, class_embed_edge], dim=-1)
-        elif self.config.train_mode in ('no_lab', 'no_both'):
-            ligand_node_h_pert = torch.cat([self.ligand_node_embedder(ligand_node_pert), time_embed_node], dim=-1)
-            ligand_edge_h_pert = torch.cat([self.ligand_edge_embedder(ligand_edge_pert), time_embed_edge], dim=-1)
+        ligand_node_h_pert = torch.cat([self.ligand_node_embedder(ligand_node_pert), time_embed_node], dim=-1)
+        ligand_edge_h_pert = torch.cat([self.ligand_edge_embedder(ligand_edge_pert), time_embed_edge], dim=-1)
         protein_h = self.protein_node_embedder(protein_node)
-
-        if self.config.node_indicator:
-            protein_h = torch.cat([protein_h, torch.zeros(len(protein_h), 1).to(protein_h)], -1)
-            ligand_node_h_pert = torch.cat([ligand_node_h_pert, torch.ones(len(ligand_node_h_pert), 1).to(ligand_node_h_pert)], -1)
 
         # 2 combine protein and ligand input
         all_node_h, all_node_pos, all_node_batch, ligand_mask = compose(
@@ -228,7 +227,7 @@ class DiffGen(Module):
         self, protein_node, protein_pos, protein_batch, 
         ligand_node, ligand_pos, ligand_batch,
         halfedge_type, halfedge_index, halfedge_batch,
-        num_mol, batch_lab
+        num_mol, train=True 
     ):
         num_graphs = num_mol
         device = ligand_pos.device
@@ -260,7 +259,7 @@ class DiffGen(Module):
             protein_node, protein_pos, protein_batch,
             ligand_node_pert, ligand_pos_pert, ligand_batch,
             ligand_edge_pert, ligand_edge_index, ligand_edge_batch, 
-            time_step, batch_lab
+            time_step
         )
         pred_ligand_node = preds['pred_ligand_node']
         pred_ligand_pos = preds['pred_ligand_pos']
@@ -291,9 +290,59 @@ class DiffGen(Module):
         else:
             loss_node = F.mse_loss(pred_ligand_node, ligand_node_0)  * 30
             loss_edge = F.mse_loss(pred_ligand_halfedge, ligand_halfedge_0) * 30
+        # 4.4 energy calculation
+        if self.config.pinn and train:
+            dm_min = 0.5
+            total_energy = 0
+            for batch_idx in range(num_graphs):
+                ligand_coor = pred_ligand_pos[ligand_batch==batch_idx]
+                protein_coor = protein_pos[protein_batch==batch_idx]
+                p1_repeat = ligand_coor.unsqueeze(1).repeat(1, protein_coor.size(0), 1)
+                p2_repeat = protein_coor.unsqueeze(0).repeat(ligand_coor.size(0), 1, 1)
+                dm = torch.sqrt(torch.pow(p1_repeat - p2_repeat, 2).sum(-1) + 1e-10)
+                replace_vec = torch.ones_like(dm) * 1e10
+                dm = torch.where(dm < dm_min, replace_vec, dm)
 
+                # ligand_recon_atom_type = log_sample_categorical(pred_ligand_node[ligand_batch==batch_idx])
+                # pred_log_atom_type = get_atomic_number_from_index(ligand_recon_atom_type,self.ligand_atom_mode)
+                # atom_type_list = get_atom_type(pred_log_atom_type)
+                
+                # ligand_vdw_radii = torch.tensor([
+                #     VDWRADII[atom_idx] for atom_idx in pred_log_atom_type
+                # ])       
+      
+                # dm_0 = ligand_vdw_radii.unsqueeze(1).repeat(1, protein_coor.size(0)).cuda()
+
+                N = 6
+                # vdw_term1 = torch.pow(dm_0 / dm, 2 * N)
+                # vdw_term2 = -2 * torch.pow(dm_0 / dm, N)
+                vdw_term1 = torch.pow(1 / dm, 2 * N)
+                vdw_term2 = -2 * torch.pow(1 / dm, N)
+                
+                energy = vdw_term1 + vdw_term2
+                energy = energy.clamp(max=100)
+                
+                # der = torch.zeros_like(ligand_coor)
+                # for x in torch.sum(energy, -1):
+                #     der += torch.autograd.grad(x, ligand_coor, retain_graph=True, create_graph=True)[0]
+                # der = torch.pow(der.sum(1), 2).mean()
+                
+                der = torch.autograd.grad(energy.sum(), dm, retain_graph=True, create_graph=True)[0]
+                der = der.sum()
+                total_energy += der
+        else:
+            total_energy = torch.tensor(0.).to(device)
         # total loss
-        if self.config.train_mode in ('ori', 'no_lab'):
+        if self.config.train_mode in ('ori'):
+            loss_total = loss_pos + loss_node + loss_edge + (loss_len if self.bond_len_loss else 0)
+            loss_dict = {
+            'loss': loss_total,
+            'loss_pos': loss_pos,
+            'loss_node': loss_node,
+            'loss_edge': loss_edge,
+            'energy'  : total_energy,
+        }
+        elif self.config.train_mode in ('no_pi'):
             loss_total = loss_pos + loss_node + loss_edge + (loss_len if self.bond_len_loss else 0)
             loss_dict = {
             'loss': loss_total,
@@ -301,13 +350,6 @@ class DiffGen(Module):
             'loss_node': loss_node,
             'loss_edge': loss_edge
         }
-        elif self.config.train_mode in ('no_bond', 'no_both'):
-            loss_total = loss_pos + loss_node + (loss_len if self.bond_len_loss else 0)
-            loss_dict = {
-                'loss': loss_total,
-                'loss_pos': loss_pos,
-                'loss_node': loss_node
-            }
         if self.bond_len_loss == True:
             loss_dict['loss_len'] = loss_len
 
@@ -329,50 +371,11 @@ class DiffGen(Module):
             extract(self.pos_transition.sqrt_recipm1_alphas_bar, t, batch)
         )
 
-    def classifier_free(
-        self, protein_node, protein_pos, protein_batch,
-        ligand_node_pert, ligand_pos_pert, ligand_batch, 
-        ligand_edge_pert, ligand_edge_index, ligand_edge_batch, 
-        gui_strength, time_step, batch_lab
-    ):
-        """
-        Compute new results for the start step in classifier free diffusion sampling.
-        """
-        preds_cond = self(
-            protein_node, protein_pos, protein_batch,
-            ligand_node_pert, ligand_pos_pert, ligand_batch,
-            ligand_edge_pert, ligand_edge_index, ligand_edge_batch, 
-            time_step, batch_lab
-        )
-
-        batch_lab_zero = torch.zeros(batch_lab.shape, device=ligand_batch.device)
-        preds_uncond = self(
-            protein_node, protein_pos, protein_batch,
-            ligand_node_pert, ligand_pos_pert, ligand_batch,
-            ligand_edge_pert, ligand_edge_index, ligand_edge_batch, 
-            time_step, batch_lab
-        )
-
-        pred_eps_cond = self._predict_eps_from_x0(
-            xt=ligand_pos_pert, t=time_step, pred_x0=preds_cond['pred_ligand_pos'], batch=ligand_batch
-        )
-        pred_eps_uncond = self._predict_eps_from_x0(
-            xt=ligand_pos_pert, t=time_step, pred_x0=preds_uncond['pred_ligand_pos'], batch=ligand_batch
-        )
-        pred_eps = (1 + gui_strength) * pred_eps_cond - gui_strength * pred_eps_uncond
-        pred_ligand_pos = self._predict_x0_from_eps(xt=ligand_pos_pert, t=time_step, eps=pred_eps, batch=ligand_batch)
-
-        pred_ligand_node = preds_cond['pred_ligand_node'] + preds_uncond['pred_ligand_node']
-        pred_ligand_halfedge = preds_cond['pred_ligand_halfedge'] + preds_uncond['pred_ligand_halfedge']
-
-        return pred_ligand_pos, pred_ligand_node, pred_ligand_halfedge
-
     @torch.no_grad()
     def sample(
         self, n_graphs, 
         protein_node, protein_pos, protein_batch, 
         ligand_batch, halfedge_index, halfedge_batch, 
-        batch_lab=None, gui_strength=None, 
         bond_predictor=None, guidance=None
     ):
         device = ligand_batch.device
@@ -414,22 +417,13 @@ class DiffGen(Module):
             time_step = torch.full(size=(n_graphs,), fill_value=step, dtype=torch.long).to(device)
             ligand_edge_h_pert = torch.cat([ligand_halfedge_h_pert, ligand_halfedge_h_pert], dim=0)
             
-            # # 2.1 inference
-            if self.config.train_mode in ('ori', 'no_bond'):
-                pred_ligand_pos, pred_ligand_node, pred_ligand_halfedge = self.classifier_free(
-                    protein_node, protein_pos, protein_batch,
-                    ligand_node_h_pert, ligand_pos_pert, ligand_batch, 
-                    ligand_edge_h_pert, ligand_edge_index, ligand_edge_batch, 
-                    gui_strength, time_step, batch_lab
-                )
-            elif self.config.train_mode in ('no_lab', 'no_both'):
-                preds = self(
-                    protein_node, protein_pos, protein_batch,
-                    ligand_node_h_pert, ligand_pos_pert, ligand_batch,
-                    ligand_edge_h_pert, ligand_edge_index, ligand_edge_batch, 
-                    time_step, batch_lab
-                )
-                pred_ligand_pos, pred_ligand_node, pred_ligand_halfedge = preds['pred_ligand_pos'], preds['pred_ligand_node'], preds['pred_ligand_halfedge']
+            preds = self(
+                protein_node, protein_pos, protein_batch,
+                ligand_node_h_pert, ligand_pos_pert, ligand_batch,
+                ligand_edge_h_pert, ligand_edge_index, ligand_edge_batch, 
+                time_step
+            )
+            pred_ligand_pos, pred_ligand_node, pred_ligand_halfedge = preds['pred_ligand_pos'], preds['pred_ligand_node'], preds['pred_ligand_halfedge']
             
             # # 2.2 get the t - 1 state
             # pos 
@@ -494,7 +488,7 @@ class DiffGen(Module):
         frag_node, frag_pos, frag_batch,
         frag_halfedge_type, frag_halfedge_index, frag_halfedge_batch,
         ligand_batch, halfedge_index, halfedge_batch, 
-        batch_lab=None, gui_strength=None, 
+        gui_strength=None, 
         bond_predictor=None, guidance=None, gen_mode=None
     ):
         device = ligand_batch.device
@@ -565,22 +559,13 @@ class DiffGen(Module):
             log_halfedge_type[frag_halfedge_mask] = log_frag_halfedge_type
             ligand_edge_h_pert = torch.cat([ligand_halfedge_h_pert, ligand_halfedge_h_pert], dim=0)
             
-            # # 2.3 inference
-            if self.config.train_mode in ('ori', 'no_bond'):
-                pred_ligand_pos, pred_ligand_node, pred_ligand_halfedge = self.classifier_free(
-                    protein_node, protein_pos, protein_batch,
-                    ligand_node_h_pert, ligand_pos_pert, ligand_batch, 
-                    ligand_edge_h_pert, ligand_edge_index, ligand_edge_batch, 
-                    gui_strength, time_step, batch_lab
-                )
-            elif self.config.train_mode in ('no_lab', 'no_both'):
-                preds = self(
-                    protein_node, protein_pos, protein_batch,
-                    ligand_node_h_pert, ligand_pos_pert, ligand_batch,
-                    ligand_edge_h_pert, ligand_edge_index, ligand_edge_batch, 
-                    time_step, batch_lab
-                )
-                pred_ligand_pos, pred_ligand_node, pred_ligand_halfedge = preds['pred_ligand_pos'], preds['pred_ligand_node'], preds['pred_ligand_halfedge']
+            preds = self(
+                protein_node, protein_pos, protein_batch,
+                ligand_node_h_pert, ligand_pos_pert, ligand_batch,
+                ligand_edge_h_pert, ligand_edge_index, ligand_edge_batch, 
+                time_step
+            )
+            pred_ligand_pos, pred_ligand_node, pred_ligand_halfedge = preds['pred_ligand_pos'], preds['pred_ligand_node'], preds['pred_ligand_halfedge']
 
             # # 2.4 get the t - 1 state
             # pos 
@@ -687,3 +672,10 @@ class DiffGen(Module):
             raise NotImplementedError(f'Guidance type {gui_type} is not implemented')
         
         return delta
+
+def get_atom_type(pred_log_atom_type): # pred_log_atom_type : List
+    type_list = []
+    for index in pred_log_atom_type:
+        atom = map_index_to_atom_type_only[index]
+        type_list.append(atom)
+    return type_list

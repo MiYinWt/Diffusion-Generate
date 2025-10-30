@@ -1,0 +1,33 @@
+model:
+  checkpoint: checkpoints/trained.pt
+# ligand: None
+# frag: None
+
+bond_predictor: checkpoints/11000.pt
+
+sample:
+  seed: 42
+  batch_size: 2
+  num_mols: 10
+  save_traj_prob: 0.02
+  sample: True
+  sample_method: priori
+  mode: pocket # pocket or test
+  test_id: 0 # 0 ~ 99
+  add_edge: None
+  guidance:
+    - uncertainty
+    - 1.e-4
+
+
+data:
+  name: protein_ligand
+  path: datas/PDBbind_v2020_pocket10
+  split: datas/PDBbind_v2020_pocket10_split.pt
+  protein_root: datas/PDBbind_v2020
+
+  dataset: pdbbind # [pdbbind, crossdocked]
+  transform:
+    ligand_atom_mode: aromatic # [basic, aromatic, full]
+    random_rot: False
+    sample: False

@@ -2,15 +2,13 @@ model:
   name: diffgen
   node_dim: 256
   edge_dim: 64
-  class_dim: 5
-  class_emb_dim: 10
   edge_feat_dim: 4
-  node_indicator: True
+  pinn: True
   bond_len_loss: True
   center_pos_mode: protein
   knn: 32
   cutoff_mode: knn
-  train_mode: ori # [ori, no_bond, no_lab, no_both]
+  train_mode: ori # [ori, no_bond, no_lab, no_both] [ori, no_bond, no_pi, no_both]
   denoiser:
     backbone: EGNN
     num_blocks: 9
@@ -46,11 +44,11 @@ model:
 train:
   seed: 42
   batch_size: 2
-  num_workers: 4
+  num_workers: 0
   threshold: 0.1
   pin_memory: True
-  max_iters: 250000
-  val_freq: 4000
+  max_iters: 500000
+  val_freq: 1000
   train_report_iter: 100
   pos_noise_std: 0.05
   max_grad_norm: 50.0
@@ -74,7 +72,7 @@ train:
 data:
   name: protein_ligand
   path: datas/PDBbind_v2020/PDBbind_v2020_pocket10
-  split: data/PDBbind_v2020/PDBbind_pocket10_split.pt
+  split: datas/PDBbind_v2020/PDBbind_pocket10_split.pt
   transform:
     ligand_atom_mode: aromatic # [basic, aromatic, full]
     random_rot: False
