@@ -24,28 +24,24 @@ class BondPredictor(Module):
         self.k = config.knn
         self.cutoff_mode = config.cutoff_mode
         self.center_pos_mode = config.center_pos_mode
-        self.bond_len_loss = getattr(config, 'bond_len_loss', False)
-
-        # # define beta and alpha
         self.define_betas_alphas(config.diff)
 
         # # embedding
-        if self.config.node_indicator:
-            node_dim = config.node_dim - 1
-        else:
-            node_dim = config.node_dim
+        node_dim = config.node_dim
         edge_dim = config.edge_dim
         time_dim = config.diff.time_dim
+
         self.protein_node_embedder = nn.Linear(protein_node_types, node_dim, bias=False) # protein element type
         self.protein_edge_embedder = nn.Linear(num_edge_types, edge_dim, bias=False) # protein bond type
-        self.ligand_node_embedder = nn.Linear(ligand_node_types, node_dim - time_dim, bias=False)  # ligand element type
-        self.ligand_edge_embedder = nn.Linear(ligand_node_types * 2, edge_dim - time_dim, bias=False) # the init edge features
+        self.ligand_node_embedder = nn.Linear(ligand_node_types, node_dim-time_dim, bias=False)  # ligand element type
+        self.ligand_edge_embedder = nn.Linear(ligand_node_types * 2, edge_dim-time_dim, bias=False) # the init edge features
+
         if self.num_timesteps != 0:
             self.time_emb = GaussianSmearing(stop=self.num_timesteps, num_gaussians=time_dim, type_='linear')
         # # predictor
-        self.encoder = NodeEdgeNet(config.node_dim, config.edge_dim, **config.encoder)
-        self.edge_decoder = MLP(config.edge_dim + config.node_dim, num_edge_types, config.edge_dim, num_layer=3)
-        
+        self.encoder = NodeEdgeNet(node_dim, edge_dim, **config.encoder)
+        self.edge_decoder = MLP(edge_dim + node_dim, num_edge_types, edge_dim, num_layer=3)
+
         self.edge_weight = torch.tensor([0.1]+[1.]*(self.num_edge_types-1), dtype=torch.float32)
         self.ce_loss = torch.nn.CrossEntropyLoss(self.edge_weight)
 
@@ -141,9 +137,6 @@ class BondPredictor(Module):
             ligand_edge_h_pert = self.ligand_edge_embedder(ligand_edge_pert)
             t = torch.zeros(ligand_batch.max() + 1, device=ligand_pos_pert.device, dtype=torch.long)
 
-        if self.config.node_indicator:
-            protein_h = torch.cat([protein_h, torch.zeros(len(protein_h), 1).to(protein_h)], -1)
-            ligand_node_h_pert = torch.cat([ligand_node_h_pert, torch.ones(len(ligand_node_h_pert), 1).to(ligand_node_h_pert)], -1)
 
         # combine protein and ligand input
         all_node_h, all_node_pos, all_node_batch, ligand_mask = compose(
@@ -230,8 +223,5 @@ class BondPredictor(Module):
             'loss': loss_total,
             'loss_edge': loss_edge,
         }
-        pred_dict = {
-            'pred_ligand_halfedge': F.softmax(pred_ligand_halfedge, dim=-1)
-        }
-        return loss_dict, pred_dict
+        return loss_dict
     

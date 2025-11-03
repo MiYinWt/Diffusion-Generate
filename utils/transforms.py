@@ -160,7 +160,7 @@ class FeatureComplex(object):
         hybrid_list = data.ligand_hybridization
         aromatic_list = [v[aromatic_idx] for v in data.ligand_atom_feature]
 
-        y = torch.tensor(
+        y = torch.LongTensor(
             [get_index(e, h, a, self.mode) for e, h, a in zip(element_list, hybrid_list, aromatic_list)]
         )
         data.ligand_atom_feat_full = y

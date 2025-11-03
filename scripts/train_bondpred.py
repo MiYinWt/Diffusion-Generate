@@ -23,111 +23,6 @@ from utils.train import *
 
 # Usage: python scripts/train_bondpred.py --config ./configs/train_configs/train_bondpred.yml --device cuda:0 --logdir ./logs/bondpred
 
-
-def train(args, config, model, train_iterator, optimizer, scaler, logger, writer, it):
-    optimizer.zero_grad(set_to_none=True)
-
-    batch = next(train_iterator).to(args.device)
-
-    protein_noise = torch.randn_like(batch.protein_pos) * config.train.pos_noise_std
-    pos_noise = torch.randn_like(batch.ligand_pos) * config.train.pos_noise_std
-
-    with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=config.train.use_amp):
-        loss_dict, _ = model.get_loss(
-            protein_node = batch.protein_atom_feat.float(), 
-            protein_pos = batch.protein_pos + protein_noise, 
-            protein_batch = batch.protein_element_batch,
-            ligand_node = batch.ligand_atom_feat_full,
-            ligand_pos = batch.ligand_pos + pos_noise,
-            ligand_batch = batch.ligand_element_batch,
-            halfedge_type = batch.ligand_halfedge_type,
-            halfedge_index = batch.ligand_halfedge_index,
-            halfedge_batch = batch.ligand_halfedge_type_batch,
-            num_mol = batch.num_graphs,
-        )
-    loss = loss_dict['loss']
-    scaler.scale(loss).backward()
-    scaler.unscale_(optimizer)
-    orig_grad_norm = clip_grad_norm_(model.parameters(), config.train.max_grad_norm)
-    scaler.step(optimizer)
-    scaler.update()
-
-    if it % config.train.train_report_iter == 0:
-        log_info = '[Train] Iter %d | ' % it + ' | '.join([
-            '%s: %.6f' % (k, v.item()) for k, v in loss_dict.items()
-        ])
-        logger.info(log_info)
-        for k, v in loss_dict.items():
-            writer.add_scalar('train/%s' % k, v.item(), it)
-        writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], it)
-        writer.add_scalar('train/grad', orig_grad_norm, it)
-        writer.flush()
-
-
-def validate(args, config, model, val_loader, scheduler, logger, writer, it):
-    sum_n =  0   # num of loss
-    sum_loss_dict = {} 
-    all_pred_half_e, all_true_half_e = [], []
-    with torch.no_grad():
-        model.eval()
-        for batch in tqdm(val_loader, desc='Validate'):
-            batch = batch.to(args.device)
-            with torch.autocast(device_type='cuda', dtype=torch.float32, enabled=config.train.use_amp):
-                loss_dict, pred_dict = model.get_loss(
-                    # compose
-                    protein_node = batch.protein_atom_feat.float(), 
-                    protein_pos = batch.protein_pos, 
-                    protein_batch = batch.protein_element_batch,
-                    ligand_node = batch.ligand_atom_feat_full,
-                    ligand_pos = batch.ligand_pos,
-                    ligand_batch = batch.ligand_element_batch,
-                    halfedge_type = batch.ligand_halfedge_type,
-                    halfedge_index = batch.ligand_halfedge_index,
-                    halfedge_batch = batch.ligand_halfedge_type_batch,
-                    num_mol = batch.num_graphs,
-                )
-            if len(sum_loss_dict) == 0:
-                sum_loss_dict = {k: v.item() for k, v in loss_dict.items()}
-            else:
-                for key in sum_loss_dict.keys():
-                    sum_loss_dict[key] += loss_dict[key].item()
-            sum_n += 1
-            all_pred_half_e.append(pred_dict["pred_ligand_halfedge"].cpu().numpy())
-            all_true_half_e.append(batch.ligand_halfedge_type.cpu().numpy())
-    
-    # finish all batches
-    avg_loss_dict = {k: v / sum_n for k, v in sum_loss_dict.items()}
-    avg_loss = avg_loss_dict['loss']
-    # update lr scheduler
-    if config.train.scheduler.type == 'plateau':
-        scheduler.step(avg_loss)
-    elif config.train.scheduler.type == 'warmup_plateau':
-        scheduler.step_ReduceLROnPlateau(avg_loss)
-    else:
-        scheduler.step()
-
-    bond_auroc = get_auroc(np.concatenate(all_true_half_e), np.concatenate(all_pred_half_e, axis=0))
-    avg_loss_dict['bond_auroc'] = bond_auroc
-
-    log_info = '[Validate] Iter %d | ' % it + ' | '.join([
-        '%s: %.6f' % (k, v) for k, v in avg_loss_dict.items()
-    ])
-    logger.info(log_info)
-    for k, v in avg_loss_dict.items():
-        writer.add_scalar('val/%s' % k, v, it)
-    writer.flush()
-    return avg_loss_dict
-
-def get_auroc(y_true, y_pred):
-    y_true = np.array(y_true)
-    y_pred = np.array(y_pred)
-    sum_auroc = 0
-    classes = set(y_true)
-    for c in classes:
-        auroc = roc_auc_score(y_true == c, y_pred[:, c])
-        sum_auroc += auroc * np.sum(y_true == c)
-    avg_auroc = sum_auroc / len(y_true)
-    return avg_auroc
     
 
 if __name__ == '__main__':
@@ -147,7 +42,6 @@ if __name__ == '__main__':
     # log_dir = args.logdir
     ckpt_dir = os.path.join(log_dir, 'checkpoints')
     os.makedirs(ckpt_dir, exist_ok=True)
-
     logger = get_logger('train', log_dir)
     writer = SummaryWriter(log_dir)
     logger.info(args)
@@ -171,7 +65,7 @@ if __name__ == '__main__':
     )
     train_set, val_set = subsets['train'], subsets['val']
     logger.info(f'Train dataset: {len(train_set)}, Validation dataset: {len(val_set)}.')
-    train_loader = DataLoader(
+    train_iterator = inf_iterator(DataLoader(
         train_set, 
         batch_size = config.train.batch_size, 
         shuffle = True,
@@ -179,8 +73,7 @@ if __name__ == '__main__':
         pin_memory = config.train.pin_memory,
         follow_batch = featurizer.follow_batch,
         exclude_keys = featurizer.exclude_keys,
-    )
-    train_iterator = inf_iterator(train_loader)
+    ))
     val_loader = DataLoader(
         val_set, 
         config.train.batch_size, 
@@ -188,6 +81,7 @@ if __name__ == '__main__':
         follow_batch=featurizer.follow_batch, 
         exclude_keys=featurizer.exclude_keys
     )
+    iters_per_epoch = len(train_set) // config.train.batch_size
 
     # Model
     logger.info('Building model...')
@@ -206,16 +100,109 @@ if __name__ == '__main__':
     scheduler = get_scheduler(config.train.scheduler, optimizer)
     scaler = torch.cuda.amp.GradScaler(enabled=config.train.use_amp)
           
+
+    def train(it):
+        optimizer.zero_grad(set_to_none=True)
+        batch = next(train_iterator).to(args.device)
+
+        protein_noise = torch.randn_like(batch.protein_pos) * config.train.pos_noise_std
+        pos_noise = torch.randn_like(batch.ligand_pos) * config.train.pos_noise_std
+
+        with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=config.train.use_amp):
+            loss_dict= model.get_loss(
+                protein_node = batch.protein_atom_feat.float(), 
+                protein_pos = batch.protein_pos + protein_noise, 
+                protein_batch = batch.protein_element_batch,
+                ligand_node = batch.ligand_atom_feat_full,
+                ligand_pos = batch.ligand_pos + pos_noise,
+                ligand_batch = batch.ligand_element_batch,
+                halfedge_type = batch.ligand_halfedge_type,
+                halfedge_index = batch.ligand_halfedge_index,
+                halfedge_batch = batch.ligand_halfedge_type_batch,
+
+                num_mol = batch.num_graphs,
+            )
+
+        loss = loss_dict['loss']
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        orig_grad_norm = clip_grad_norm_(model.parameters(), config.train.max_grad_norm)
+        scaler.step(optimizer)
+        scaler.update()
+
+        if it % config.train.train_report_iter == 0:
+            epoch = it // iters_per_epoch
+            log_info = '[Train] Epoch %d | Iter %d | ' % (epoch, it) + ' | '.join([
+                '%s: %.6f' % (k, v.item()) for k, v in loss_dict.items()
+            ])
+            logger.info(log_info)
+            for k, v in loss_dict.items():
+                writer.add_scalar('train/%s' % k, v.item(), it)
+            writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], it)
+            writer.add_scalar('train/grad', orig_grad_norm, it)
+            writer.flush()
+
+
+    def validate(it):
+        sum_n =  0   # num of loss
+        sum_loss_dict = {} 
+        with torch.no_grad():
+            model.eval()
+            for batch in tqdm(val_loader, desc='Validate'):
+                batch = batch.to(args.device)
+                with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=config.train.use_amp):
+                    loss_dict = model.get_loss(
+                        # compose
+                        protein_node = batch.protein_atom_feat.float(), 
+                        protein_pos = batch.protein_pos, 
+                        protein_batch = batch.protein_element_batch,
+                        ligand_node = batch.ligand_atom_feat_full,
+                        ligand_pos = batch.ligand_pos,
+                        ligand_batch = batch.ligand_element_batch,
+                        halfedge_type = batch.ligand_halfedge_type,
+                        halfedge_index = batch.ligand_halfedge_index,
+                        halfedge_batch = batch.ligand_halfedge_type_batch,
+                        num_mol = batch.num_graphs,
+                    )
+                if len(sum_loss_dict) == 0:
+                    sum_loss_dict = {k: v.item() for k, v in loss_dict.items()}
+                else:
+                    for key in sum_loss_dict.keys():
+                        sum_loss_dict[key] += loss_dict[key].item()
+                sum_n += 1
+
+
+        # finish all batches
+        avg_loss_dict = {k: v / sum_n for k, v in sum_loss_dict.items()}
+        avg_loss = avg_loss_dict['loss']
+        # update lr scheduler
+        if config.train.scheduler.type == 'plateau':
+            scheduler.step(avg_loss)
+        elif config.train.scheduler.type == 'warmup_plateau':
+            scheduler.step_ReduceLROnPlateau(avg_loss)
+        else:
+            scheduler.step()
+
+
+        log_info = '[Validate] Iter %d | ' % it + ' | '.join([
+            '%s: %.6f' % (k, v) for k, v in avg_loss_dict.items()
+        ])
+        logger.info(log_info)
+        for k, v in avg_loss_dict.items():
+            writer.add_scalar('val/%s' % k, v, it)
+        writer.flush()
+        return avg_loss_dict
+
     try:
         model.train()
         for it in range(1, config.train.max_iters+1):
             try:
-                train(args, config, model, train_iterator, optimizer, scaler, logger, writer, it)
+                train(it)
             except RuntimeError as e:
                 logger.error('Runtime Error ' + str(e))
                 logger.error('Skipping Iteration %d' % it)
             if it % config.train.val_freq == 0 or it == config.train.max_iters:
-                validate(args, config, model, val_loader, scheduler, logger, writer, it)
+                validate(it)
                 ckpt_path = os.path.join(ckpt_dir, '%d.pt' % it)
                 torch.save({
                     'config': config,
@@ -225,5 +212,6 @@ if __name__ == '__main__':
                     'iteration': it,
                 }, ckpt_path)
                 model.train()
+
     except KeyboardInterrupt:
         logger.info('Terminating...')
