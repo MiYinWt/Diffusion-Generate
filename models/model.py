@@ -267,7 +267,9 @@ class DiffGen(Module):
 
         # 4. loss
         # 4.1 pos loss
-        loss_pos = F.mse_loss(pred_ligand_pos, ligand_pos)
+        loss_pos = scatter_mean(((pred_ligand_pos - ligand_pos) ** 2).sum(-1), ligand_batch, dim=0)
+        loss_pos = torch.mean(loss_pos)
+        
         if self.bond_len_loss == True:
             bond_index = halfedge_index[:, halfedge_type > 0]
             true_length = torch.norm(ligand_pos[bond_index[0]] - ligand_pos[bond_index[1]], dim=-1)

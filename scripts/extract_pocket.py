@@ -5,7 +5,7 @@ from utils.data import PDBProtein, parse_drug3d_mol
 
 
 if __name__ == "__main__":
-    # Useage: python extract_pockets.py --protein 3ztx_protein.pdb --ligand 3ztx_ligand.sdf --radius 10 --pocket 3ztx_pocket.pdb
+    # Useage: python scripts/extract_pocket.py --protein fgfr1/rec.pdb --ligand fgfr1/lig.sdf --radius 10 --pocket pocket.pdb
     parser = argparse.ArgumentParser()
     parser.add_argument("--protein", type=str, default="3ztx_protein.pdb")
     parser.add_argument("--ligand", type=str, default="3ztx_ligand.sdf")

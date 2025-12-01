@@ -35,7 +35,8 @@ def get_unique_pockets(dataset, raw_id, used_pdb, num_pockets):
 
 
 if __name__ == '__main__':
-     # Useage: python ./datas/data_preparation/split_set.py --path ./datas/PDBbind_v2020/PDBbind_v2020_pocket10 --dest ./datas/PDBbind_v2020/PDBbind_pocket10_split.pt --train 17000 --val 1800 --test 100
+    # total 18967 
+    # Useage: python ./datas/data_preparation/split_set.py --path ./datas/PDBbind_v2020/PDBbind_v2020_pocket10 --dest ./datas/PDBbind_v2020/PDBbind_pocket10_split.pt --train 17070 --val 1722 --test 100
     parser = argparse.ArgumentParser()
     parser.add_argument('--path', type=str, required=True)
     parser.add_argument('--dest', type=str, required=True)

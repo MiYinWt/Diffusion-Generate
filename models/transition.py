@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-
+from torch_scatter import scatter_mean
 from models.diffusion import categorical_kl, extract, index_to_log_onehot, log_1_min_a, log_add_exp, log_categorical, log_sample_categorical, to_torch_const
 
 
@@ -315,17 +315,11 @@ class GeneralCategoricalTransition(nn.Module):
         return out
 
     def compute_v_Lt(self, log_v_post_true, log_v_post_pred, log_v0, t, batch):
-        kl_v = categorical_kl(log_v_post_true, log_v_post_pred)
-        decoder_nll_v = - log_categorical(log_v0, log_v_post_pred)
-
-        ndim = log_v_post_true.ndim
-        if ndim == 2:
-            mask = (t == 0).float()[batch]
-        elif ndim == 3:
-            mask = (t == 0).float()[batch].unsqueeze(-1)
-        else:
-            raise NotImplementedError('ndim not supported')
-        loss_v = mask * decoder_nll_v + (1 - mask) * kl_v
+        kl_v = categorical_kl(log_v_post_true, log_v_post_pred)  # [num_atoms, ]
+        decoder_nll_v = -log_categorical(log_v0, log_v_post_pred)  # L0
+        assert kl_v.shape == decoder_nll_v.shape
+        mask = (t == 0).float()[batch]
+        loss_v = scatter_mean(mask * decoder_nll_v + (1. - mask) * kl_v, batch, dim=0)
         return loss_v
         
     def sample_init(self, n):

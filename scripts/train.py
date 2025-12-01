@@ -113,22 +113,22 @@ if __name__ == '__main__':
     optimizer = get_optimizer(config.train.optimizer, model)
     scheduler = get_scheduler(config.train.scheduler, optimizer)
     scaler = torch.cuda.amp.GradScaler(enabled=config.train.use_amp)
-
         
     def train(it):
         optimizer.zero_grad(set_to_none=True)
         batch = next(train_iterator).to(args.device)
         batch_size = batch.num_graphs
-
-        protein_noise = torch.randn_like(batch.protein_pos) * config.train.pos_noise_std
+        pro_noise = torch.randn_like(batch.protein_pos) * config.train.pos_noise_std
         pos_noise = torch.randn_like(batch.ligand_pos) * config.train.pos_noise_std
-        with torch.autocast(device_type='cuda', dtype=torch.float32, enabled=config.train.use_amp):
+        with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=config.train.use_amp):
             loss_dict, _ = model.get_loss(
                 protein_node = batch.protein_atom_feat.float(), 
-                protein_pos = batch.protein_pos + protein_noise, 
+                protein_pos = batch.protein_pos + pro_noise,
+                # protein_pos = batch.protein_pos, 
                 protein_batch = batch.protein_element_batch,
                 ligand_node = batch.ligand_atom_feat_full,
                 ligand_pos = batch.ligand_pos + pos_noise,
+                # ligand_pos = batch.ligand_pos,
                 ligand_batch = batch.ligand_element_batch,
                 halfedge_type = batch.ligand_halfedge_type,
                 halfedge_index = batch.ligand_halfedge_index,
@@ -136,29 +136,28 @@ if __name__ == '__main__':
                 num_mol = batch_size,
                 train = True
             )
+
         loss,energy = loss_dict['loss'],loss_dict['energy']
-
-        energy_loss = (energy * (it/500000) * 0.1).abs()
+        energy_loss = (energy * (it/config.train.max_iters) * 0.1).abs()
         total_loss = loss + energy_loss
-
-        # total_loss = loss_dict['loss']
 
         scaler.scale(total_loss).backward()
         scaler.unscale_(optimizer)
         orig_grad_norm = clip_grad_norm_(model.parameters(), config.train.max_grad_norm)
         scaler.step(optimizer)
         scaler.update()
-
+        
         if it % config.train.train_report_iter == 0:
             log_info = '[Train] Iter %d | ' % it + ' | '.join([
-            '%s: %.6f' % (k, v.item()) for k, v in loss_dict.items()
-        ])
+                '%s: %.6f' % (k, v.item()) for k, v in loss_dict.items()
+            ])
             logger.info(log_info)
             for k, v in loss_dict.items():
                 writer.add_scalar('train/%s' % k, v.item(), it)
             writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], it)
             writer.add_scalar('train/grad', orig_grad_norm, it)
             writer.flush()
+
 
     def validate(it):
         sum_n =  0   # num of loss
@@ -170,7 +169,7 @@ if __name__ == '__main__':
             for batch in tqdm(val_loader, desc='Validate'):
                 batch = batch.to(args.device)
                 batch_size = batch.num_graphs
-                with torch.autocast(device_type='cuda', dtype=torch.float32, enabled=config.train.use_amp):
+                with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=config.train.use_amp):
                     loss_dict, pred_dict = model.get_loss(
                         protein_node = batch.protein_atom_feat.float(), 
                         protein_pos = batch.protein_pos, 
@@ -229,7 +228,7 @@ if __name__ == '__main__':
                 logger.error('Runtime Error ' + str(e))
                 logger.error('Skipping Iteration %d' % it)
             if it % config.train.val_freq == 0 or it == config.train.max_iters:
-                loss_dict = validate(args, config, model, val_loader, scheduler, logger, writer, it)
+                loss_dict = validate(it)
                 ckpt_path = os.path.join(ckpt_dir, '%d.pt' % it)
                 torch.save({
                     'config': config,
@@ -238,7 +237,6 @@ if __name__ == '__main__':
                     'scheduler': scheduler.state_dict(),
                     'iteration': it,
                 }, ckpt_path)
-                early_stop = 0
                 model.train()
     except KeyboardInterrupt:
         logger.info('Terminating...')

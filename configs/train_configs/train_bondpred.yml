@@ -1,13 +1,13 @@
 model:
   name: bond_predictor
-  node_dim: 256
-  edge_dim: 64
+  node_dim: 128
+  edge_dim: 32
   center_pos_mode: protein
   knn: 32
   cutoff_mode: knn
   encoder:
     backbone: EGNN
-    num_blocks: 9
+    num_blocks: 8
     cutoff: 20
     use_gate: True
     update_edge: True
@@ -29,25 +29,26 @@ model:
       width: 3
 
 train:
-  seed: 42
-  batch_size: 2
+  seed: 2023
+  batch_size: 16
   num_workers: 0
+  num_accum: 4
   pin_memory: True
   max_iters: 600000
   val_freq: 1000
-  train_report_iter: 100
-  pos_noise_std: 0.05
-  max_grad_norm: 50.0
+  train_report_iter: 1
+  pos_noise_std: 0.1
+  max_grad_norm: 8.0
   use_amp: True
   optimizer:
     type: adamw
-    lr: 1.e-4
-    weight_decay: 1.e-4
-    beta1: 0.99
+    lr: 5.e-4
+    weight_decay: 1.e-8
+    beta1: 0.95
     beta2: 0.999
   scheduler:
     type: plateau
-    factor: 0.8
+    factor: 0.6
     patience: 10
     min_lr: 1.e-8
 

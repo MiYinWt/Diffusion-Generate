@@ -1,9 +1,14 @@
 __pycache__/
-datas/crossdocked2020/*
-datas/geom_drug/*
-datas/PDBbind_v2020/*
+datas/crossdocked2020
+datas/geom_drug
+datas/PDBbind_v2020
+datas/geom_drug1
+datas/test_set
+datas/test_pocket10
 checkpoints/bondpred/*
 logs/*
 outputs/*
 *.pt
 fgfr1
+tmp
+test.py

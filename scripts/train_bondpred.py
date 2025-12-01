@@ -21,9 +21,19 @@ import utils.transforms as transforms
 from utils.misc import *
 from utils.train import *
 
-# Usage: python scripts/train_bondpred.py --config ./configs/train_configs/train_bondpred.yml --device cuda:0 --logdir ./logs/bondpred
 
-    
+def get_auroc(y_true, y_pred):
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+    sum_auroc = 0
+    classes = set(y_true)
+    for c in classes:
+        auroc = roc_auc_score(y_true == c, y_pred[:, c])
+        sum_auroc += auroc * np.sum(y_true == c)
+    avg_auroc = sum_auroc / len(y_true)
+    return avg_auroc    
+
+# Usage: python scripts/train_bondpred.py --config ./configs/train_configs/train_bondpred.yml --device cuda:0 --logdir ./logs/bondpred
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -81,7 +91,6 @@ if __name__ == '__main__':
         follow_batch=featurizer.follow_batch, 
         exclude_keys=featurizer.exclude_keys
     )
-    iters_per_epoch = len(train_set) // config.train.batch_size
 
     # Model
     logger.info('Building model...')
@@ -102,16 +111,14 @@ if __name__ == '__main__':
           
 
     def train(it):
-        optimizer.zero_grad(set_to_none=True)
+        
         batch = next(train_iterator).to(args.device)
-
-        protein_noise = torch.randn_like(batch.protein_pos) * config.train.pos_noise_std
         pos_noise = torch.randn_like(batch.ligand_pos) * config.train.pos_noise_std
-
+        
         with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=config.train.use_amp):
-            loss_dict= model.get_loss(
+            loss_dict, _ = model.get_loss(
                 protein_node = batch.protein_atom_feat.float(), 
-                protein_pos = batch.protein_pos + protein_noise, 
+                protein_pos = batch.protein_pos, 
                 protein_batch = batch.protein_element_batch,
                 ligand_node = batch.ligand_atom_feat_full,
                 ligand_pos = batch.ligand_pos + pos_noise,
@@ -119,39 +126,47 @@ if __name__ == '__main__':
                 halfedge_type = batch.ligand_halfedge_type,
                 halfedge_index = batch.ligand_halfedge_index,
                 halfedge_batch = batch.ligand_halfedge_type_batch,
-
                 num_mol = batch.num_graphs,
             )
 
         loss = loss_dict['loss']
+        loss = loss / config.train.num_accum
         scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        orig_grad_norm = clip_grad_norm_(model.parameters(), config.train.max_grad_norm)
-        scaler.step(optimizer)
-        scaler.update()
+
+        # Update weights and reset gradients only after accumulating for num_accum steps
+        if it % config.train.num_accum == 0:
+            scaler.unscale_(optimizer)
+            orig_grad_norm = clip_grad_norm_(model.parameters(), config.train.max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+
 
         if it % config.train.train_report_iter == 0:
-            epoch = it // iters_per_epoch
-            log_info = '[Train] Epoch %d | Iter %d | ' % (epoch, it) + ' | '.join([
+            # Because the optimizer step is now conditional, we should log the grad norm
+            # only when it's actually computed.
+            grad_norm_to_log = orig_grad_norm if it % config.train.num_accum == 0 else 0.0
+            log_info = '[Train] Iter %d | ' % it + ' | '.join([
                 '%s: %.6f' % (k, v.item()) for k, v in loss_dict.items()
             ])
             logger.info(log_info)
             for k, v in loss_dict.items():
                 writer.add_scalar('train/%s' % k, v.item(), it)
             writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], it)
-            writer.add_scalar('train/grad', orig_grad_norm, it)
+            writer.add_scalar('train/grad', grad_norm_to_log, it)
             writer.flush()
 
 
     def validate(it):
         sum_n =  0   # num of loss
         sum_loss_dict = {} 
+        all_pred_half_e, all_true_half_e = [], []
         with torch.no_grad():
             model.eval()
             for batch in tqdm(val_loader, desc='Validate'):
                 batch = batch.to(args.device)
                 with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=config.train.use_amp):
-                    loss_dict = model.get_loss(
+                    loss_dict, pred_dict = model.get_loss(
                         # compose
                         protein_node = batch.protein_atom_feat.float(), 
                         protein_pos = batch.protein_pos, 
@@ -170,7 +185,8 @@ if __name__ == '__main__':
                     for key in sum_loss_dict.keys():
                         sum_loss_dict[key] += loss_dict[key].item()
                 sum_n += 1
-
+                all_pred_half_e.append(pred_dict["pred_ligand_halfedge"].cpu().numpy())
+                all_true_half_e.append(batch.ligand_halfedge_type.cpu().numpy())
 
         # finish all batches
         avg_loss_dict = {k: v / sum_n for k, v in sum_loss_dict.items()}
@@ -183,6 +199,8 @@ if __name__ == '__main__':
         else:
             scheduler.step()
 
+        bond_auroc = get_auroc(np.concatenate(all_true_half_e), np.concatenate(all_pred_half_e, axis=0))
+        avg_loss_dict['bond_auroc'] = bond_auroc
 
         log_info = '[Validate] Iter %d | ' % it + ' | '.join([
             '%s: %.6f' % (k, v) for k, v in avg_loss_dict.items()
@@ -194,6 +212,8 @@ if __name__ == '__main__':
         return avg_loss_dict
 
     try:
+        # Clear gradients at the beginning of training
+        optimizer.zero_grad(set_to_none=True)
         model.train()
         for it in range(1, config.train.max_iters+1):
             try:

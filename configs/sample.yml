@@ -1,19 +1,19 @@
 model:
   checkpoint: checkpoints/trained.pt
-# ligand: None
+  gen_mode: denovo  # denovo or ligand_ref
+  ligand: None
 # frag: None
 
-bond_predictor: checkpoints/11000.pt
+bond_predictor: checkpoints/bondpred.pt
 
 sample:
   seed: 42
-  batch_size: 2
-  num_mols: 10
-  save_traj_prob: 0.02
+  batch_size: 64
+  num_mols: 100
+  save_traj_prob: 0
   sample: True
   sample_method: priori
-  mode: pocket # pocket or test
-  test_id: 0 # 0 ~ 99
+  mode: test # pocket or test
   add_edge: None
   guidance:
     - uncertainty
@@ -22,10 +22,9 @@ sample:
 
 data:
   name: protein_ligand
-  path: datas/PDBbind_v2020_pocket10
-  split: datas/PDBbind_v2020_pocket10_split.pt
-  protein_root: datas/PDBbind_v2020
-
+  path: datas/PDBbind_v2020/PDBbind_v2020_pocket10
+  split: datas/PDBbind_v2020/PDBbind_pocket10_split.pt
+  protein_root: datas/PDBbind_v2020/source
   dataset: pdbbind # [pdbbind, crossdocked]
   transform:
     ligand_atom_mode: aromatic # [basic, aromatic, full]

@@ -221,7 +221,8 @@ class BondPredictor(Module):
         
         loss_dict = {
             'loss': loss_total,
-            'loss_edge': loss_edge,
         }
-        return loss_dict
-    
+        pred_dict = {
+            'pred_ligand_halfedge': F.softmax(pred_ligand_halfedge, dim=-1)
+        }
+        return loss_dict, pred_dict

@@ -42,21 +42,18 @@ model:
           width: 2
 
 train:
-  seed: 42
-  batch_size: 2
+  seed: 2023
+  batch_size: 4
   num_workers: 0
-  threshold: 0.1
+  num_accum: 1
+  ema_decay: 0.999
   pin_memory: True
-  max_iters: 500000
+  max_iters: 250000
   val_freq: 1000
-  train_report_iter: 100
+  train_report_iter: 1
   pos_noise_std: 0.05
   max_grad_norm: 50.0
   use_amp: True
-  resume: False
-  resume_ckpt: None
-  prev_model: False
-  prev_ckpt: None
   optimizer:
     type: adamw
     lr: 1.e-4
@@ -65,14 +62,16 @@ train:
     beta2: 0.999
   scheduler:
     type: plateau
-    factor: 0.8
+    factor: 0.6
     patience: 10
-    min_lr: 1.e-8
+    min_lr: 1.e-6
 
 data:
   name: protein_ligand
   path: datas/PDBbind_v2020/PDBbind_v2020_pocket10
   split: datas/PDBbind_v2020/PDBbind_pocket10_split.pt
+  # path: datas/crossdocked2020/crossdocked_v1.1_rmsd1.0_pocket10
+  # split: datas/crossdocked2020/crossdocked_pocket10_pose_split.pt
   transform:
     ligand_atom_mode: aromatic # [basic, aromatic, full]
     random_rot: False

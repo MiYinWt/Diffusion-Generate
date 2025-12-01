@@ -1,0 +1,17 @@
+sample_path: outputs/sample_20251117_174936
+verbose: False
+eval_num_examples: null
+save: True
+protein_root: datas/PDBbind_v2020/source
+dataset: pdbbind # [pdbbind, crossdocked]
+atom_enc_mode: aromatic
+docking_mode: vina_score # ['qvina', 'vina_score', 'vina_dock', 'none']
+eval_mode: all # [bond_only, all]
+exhaustiveness: 16
+
+data:
+  name: protein_ligand
+  path: datas/PDBbind_v2020/PDBbind_v2020_pocket10
+  split: datas/PDBbind_v2020/PDBbind_pocket10_split.pt
+  #path: data/crossdocked_v1.1_rmsd1.0_pocket10
+  #split: data/crossdocked_pocket10_pose_split.pt

@@ -3,7 +3,7 @@ import pickle
 import argparse
 from tqdm import tqdm
 
-INDEX_FILENAME = 'index/INDEX_general_PL.2020R1.lst'
+INDEX_FILENAME = 'index/INDEX_general_PL_data.2020'
 
 if __name__ == "__main__":
     # Useage: python ./datas/data_preparation/clean_PDBbind.py --source ./datas/PDBbind_v2020/source --dest ./datas/PDBbind_v2020/pkl
@@ -17,20 +17,20 @@ if __name__ == "__main__":
 
     index = []
     with open(index_path, 'r') as f:
-        lines = f.readlines()[1:]  # skip the first line
-        for line in tqdm(lines):
-            if line.startswith('#'):
-                continue
-            else:
-                pdbid, res, year, pka = line.split('//')[0].strip().split()
-                try:
-                    protein_fn = pdbid + "/" + pdbid + "_protein.pdb"
-                    ligand_fn = pdbid + "/" + pdbid + "_ligand.sdf"
+        lines = f.readlines() # skip the first line
+    for line in tqdm(lines):
+        if line.startswith('#'):
+            continue
+        else:
+            pdbid, res, year, pka, kv = line.split('//')[0].strip().split()
+            try:
+                protein_fn = pdbid + "/" + pdbid + "_protein.pdb"
+                ligand_fn = pdbid + "/" + pdbid + "_ligand.sdf"
 
-                    index.append((protein_fn, ligand_fn, pdbid))
-                except Exception as e:
-                    print(pdbid, str(e))
-                    continue
+                index.append((protein_fn, ligand_fn, pdbid))
+            except Exception as e:
+                print(pdbid, str(e))
+                continue
 
     index_path = os.path.join(args.dest, 'index.pkl')            
     with open(index_path, 'wb') as f:
